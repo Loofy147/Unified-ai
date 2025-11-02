@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 
+from core.config import settings
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -78,18 +80,18 @@ class ResourceMonitor:
 class ResourceManager:
     """Gestionnaire de ressources complet avec monitoring"""
 
-    def __init__(self):
+    def __init__(self, max_cpu: float, max_memory_mb: float):
         self.resources = {
-            'cpu': {'total': 100.0, 'available': 100.0, 'unit': 'percent'},
-            'memory': {'total': 16000.0, 'available': 16000.0, 'unit': 'MB'},
-            'gpu': {'total': 1.0, 'available': 1.0, 'unit': 'device'}
+            'cpu': {'total': max_cpu, 'available': max_cpu, 'unit': 'percent'},
+            'memory': {'total': max_memory_mb, 'available': max_memory_mb, 'unit': 'MB'},
+            'gpu': {'total': 1.0, 'available': 1.0, 'unit': 'device'} # GPU remains hardcoded for now
         }
         self.allocations: Dict[str, ResourceAllocation] = {}
         self.lock = asyncio.Lock()
         self.monitor = ResourceMonitor()
         self.allocation_history = []
 
-        logger.info("ResourceManager initialized")
+        logger.info(f"ResourceManager initialized with max_cpu={max_cpu}, max_memory_mb={max_memory_mb}")
 
     async def start(self):
         """Démarre le gestionnaire"""
@@ -261,9 +263,18 @@ class ResourceManager:
 # Singleton instance
 _resource_manager_instance = None
 
-def get_resource_manager() -> ResourceManager:
-    """Retourne l'instance singleton du ResourceManager"""
+def get_resource_manager(force_reload: bool = False) -> ResourceManager:
+    """
+    Retourne l'instance singleton du ResourceManager.
+
+    Args:
+        force_reload: Si True, force la recréation de l'instance. Utile pour les tests.
+    """
     global _resource_manager_instance
-    if _resource_manager_instance is None:
-        _resource_manager_instance = ResourceManager()
+    if _resource_manager_instance is None or force_reload:
+        from core.config import settings
+        _resource_manager_instance = ResourceManager(
+            max_cpu=settings.resource_manager.max_cpu,
+            max_memory_mb=settings.resource_manager.max_memory_mb
+        )
     return _resource_manager_instance

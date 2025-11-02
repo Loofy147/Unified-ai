@@ -7,27 +7,36 @@ import sys
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from intelligence.model_zoo import get_model_zoo, ModelZoo
+from intelligence.model_zoo import get_model_zoo
 from orchestration.integrated_unified_agent import IntegratedUnifiedAgent
 from agents.base_agent import Task
+from core.config import settings
 
-# Fixture to get a clean ModelZoo instance for each test
-@pytest.fixture
-def model_zoo():
-    # We need to create a new instance for testing purposes to avoid state leakage
-    # between tests, especially since the singleton is stateful.
-    zoo = ModelZoo(storage_path="models_test")
-    yield zoo
-    # Teardown: clean up the test models directory
-    import shutil
-    shutil.rmtree("models_test", ignore_errors=True)
+@pytest.fixture(autouse=True)
+def isolated_singletons(monkeypatch, tmp_path):
+    """
+    Fixture to ensure that singleton instances are re-created for each test
+    with a temporary, isolated configuration.
+    """
+    # Use a temporary directory for the model zoo storage
+    test_model_path = tmp_path / "models"
+    monkeypatch.setattr(settings.model_zoo, 'storage_path', str(test_model_path))
+
+    # Force the singletons to be re-created on their next call
+    get_model_zoo(force_reload=True)
+
+    yield
+
+    # Teardown is handled automatically by pytest's tmp_path and monkeypatch
 
 @pytest.mark.asyncio
-async def test_model_zoo_rejects_malicious_model(model_zoo: ModelZoo):
+async def test_model_zoo_rejects_malicious_model():
     """
     Verifies that the ModelZoo correctly rejects a model with a __reduce__
     method, preventing a potential deserialization attack.
     """
+    model_zoo = get_model_zoo()
+
     class MaliciousModel:
         def __reduce__(self):
             import os
@@ -79,3 +88,62 @@ async def test_byzantine_agent_performance_is_ignored():
     assert result['performance'] == 0.0, "System should have ignored the invalid performance score."
 
     await system.shutdown()
+
+class SimpleTestModel:
+    def __init__(self, value):
+        self.value = value
+    def predict(self, x):
+        return self.value * x
+
+@pytest.mark.asyncio
+async def test_model_zoo_can_store_and_retrieve_complex_object():
+    """
+    Verifies that the ModelZoo can correctly serialize and deserialize a
+    non-trivial Python object using dill.
+    """
+    model_zoo = get_model_zoo()
+
+    # 1. Create and register a complex object
+    original_model = SimpleTestModel(value=42)
+    model_id = "complex_test_model"
+    version = await model_zoo.register_model(model_id, original_model, {"type": "test"})
+
+    assert version == 1
+
+    # 2. Retrieve the model
+    # To ensure it's loaded from disk, we'll force-reload the singleton
+    retrieved_model = await get_model_zoo(force_reload=True).get_model(model_id, version)
+
+    # 3. Verify the retrieved object
+    assert retrieved_model is not None
+    assert isinstance(retrieved_model, SimpleTestModel)
+    assert retrieved_model.value == 42
+    assert retrieved_model.predict(2) == 84
+    assert retrieved_model is not original_model # Should be a new instance
+
+@pytest.mark.asyncio
+async def test_model_zoo_delete_model_removes_files():
+    """
+    Verifies that deleting a model version also removes its corresponding
+    .dill file from the disk.
+    """
+    model_zoo = get_model_zoo()
+    model_id = "deletable_model"
+
+    # 1. Register a model, which should create files on disk
+    model = SimpleTestModel(100)
+    version = await model_zoo.register_model(model_id, model, {})
+
+    model_path = Path(settings.model_zoo.storage_path) / model_id
+    model_file = model_path / f"v{version}.dill"
+    metadata_file = model_path / f"v{version}_metadata.json"
+
+    assert model_file.exists()
+    assert metadata_file.exists()
+
+    # 2. Delete the model
+    await model_zoo.delete_model(model_id, version)
+
+    # 3. Verify that the files have been removed
+    assert not model_file.exists()
+    assert not metadata_file.exists()
