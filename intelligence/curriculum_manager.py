@@ -40,6 +40,9 @@ class CurriculumManager:
 
         self.levels = self._initialize_levels()
         self.advancement_log = []
+        self.validation_enabled = True  # NEW
+        self.min_samples_for_advancement = 20  # NEW (was 10)
+        self.consistency_threshold = 0.15  # NEW
 
         logger.info(f"CurriculumManager initialized (level={initial_level}/{max_level})")
 
@@ -58,71 +61,95 @@ class CurriculumManager:
             10: DifficultyLevel(10, 'Mythic', 1.5, 5000, 0.95)
         }
 
-    async def evaluate_performance(self, performance: float,
-                                   task_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Évalue la performance et décide de la progression
+    async def evaluate_performance(self, performance, task_context):
+        """Evaluate with validation"""
 
-        Args:
-            performance: Score de performance (0.0 à 1.0)
-            task_context: Contexte de la tâche (optionnel)
-
-        Returns:
-            Dictionnaire avec décision et détails
-        """
+        # Store with metadata for validation
         self.performance_history.append({
             'performance': performance,
             'level': self.current_level,
             'timestamp': datetime.now().isoformat(),
-            'context': task_context or {}
+            'context': task_context,
+            'validated': False  # NEW
         })
 
-        current_level_obj = self.levels[self.current_level]
+        # Need enough samples
+        if len(self.performance_history) < self.min_samples_for_advancement:
+            return {'action': 'collecting_data'}
 
-        # Calculer la performance récente
-        window = 10
-        if len(self.performance_history) >= window:
-            recent_performances = [
-                p['performance'] for p in self.performance_history[-window:]
-                if p['level'] == self.current_level
-            ]
+        recent = self.performance_history[-self.min_samples_for_advancement:]
+        recent_perf = [p['performance'] for p in recent]
 
-            if len(recent_performances) >= window:
-                recent_avg = np.mean(recent_performances)
-                recent_std = np.std(recent_performances)
-
-                decision = {
-                    'current_level': self.current_level,
-                    'performance': performance,
-                    'recent_average': recent_avg,
-                    'recent_std': recent_std,
-                    'threshold': current_level_obj.success_threshold,
-                    'action': 'continue'
+        # CRITICAL: Validation checks
+        if self.validation_enabled:
+            # 1. Check for suspicious consistency (gaming indicator)
+            std_dev = np.std(recent_perf)
+            if std_dev < 0.02:  # Too consistent
+                logger.warning(
+                    f"Suspiciously consistent performance: std={std_dev:.4f}"
+                )
+                return {
+                    'action': 'validation_failed',
+                    'reason': 'performance_too_consistent'
                 }
 
-                # Décision d'avancement
-                if (recent_avg >= current_level_obj.success_threshold and
-                    recent_std < 0.1 and
-                    self.current_level < self.max_level):
+            # 2. Check for impossible values
+            if any(p > 0.98 for p in recent_perf):
+                logger.warning("Suspiciously high performance detected")
+                # Require external validation
+                if not await self._external_validation(recent):
+                    return {
+                        'action': 'validation_failed',
+                        'reason': 'external_validation_required'
+                    }
 
-                    await self.advance_level()
-                    decision['action'] = 'advanced'
-                    decision['new_level'] = self.current_level
+            # 3. Check for monotonic improvement (gaming indicator)
+            if len(recent_perf) >= 10:
+                is_monotonic = all(
+                    recent_perf[i] <= recent_perf[i+1]
+                    for i in range(len(recent_perf)-1)
+                )
+                if is_monotonic:
+                    logger.warning("Monotonic improvement detected (suspicious)")
+                    return {
+                        'action': 'validation_failed',
+                        'reason': 'monotonic_improvement_suspicious'
+                    }
 
-                # Décision de régression (si performance très faible)
-                elif recent_avg < 0.5 and self.current_level > 1:
-                    await self.regress_level()
-                    decision['action'] = 'regressed'
-                    decision['new_level'] = self.current_level
+            # 4. Check consistency across metrics
+            # If we have multiple metrics, they should correlate
+            if not await self._check_metric_correlation(recent):
+                return {
+                    'action': 'validation_failed',
+                    'reason': 'metric_inconsistency'
+                }
 
-                return decision
+        # Validation passed, proceed with normal logic
+        avg_performance = np.mean(recent_perf)
+        current_threshold = self.levels[self.current_level].success_threshold
 
-        return {
-            'current_level': self.current_level,
-            'performance': performance,
-            'action': 'collecting_data',
-            'samples_needed': window - len(self.performance_history)
-        }
+        if avg_performance >= current_threshold:
+            # Mark as validated before advancing
+            for p in recent:
+                p['validated'] = True
+
+            await self.advance_level()
+            return {'action': 'advanced', 'new_level': self.current_level}
+
+        return {'action': 'continue'}
+
+    async def _external_validation(self, recent_experiences):
+        """Require external validation for suspicious performance"""
+        # In production: run agent on held-out validation set
+        # For now: placeholder that would connect to validation system
+        logger.info("External validation required")
+        return False  # Deny by default until validated
+
+    async def _check_metric_correlation(self, recent_experiences):
+        """Check if multiple metrics correlate appropriately"""
+        # If agent reports high accuracy but low reward, that's suspicious
+        # Implementation depends on available metrics
+        return True  # Placeholder
 
     async def advance_level(self):
         """Passe au niveau suivant"""

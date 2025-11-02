@@ -88,6 +88,8 @@ class ResourceManager:
         self.lock = asyncio.Lock()
         self.monitor = ResourceMonitor()
         self.allocation_history = []
+        self.pending_queue = asyncio.Queue()  # NEW
+        self.hard_limits_enabled = True  # NEW
 
         logger.info("ResourceManager initialized")
 
@@ -101,34 +103,34 @@ class ResourceManager:
         self.monitor.stop_monitoring()
         logger.info("ResourceManager stopped")
 
-    async def allocate(self, agent_id: str, requirements: Dict[str, float],
-                      priority: int = 1) -> bool:
-        """
-        Alloue des ressources à un agent
-
-        Args:
-            agent_id: ID de l'agent
-            requirements: Ressources demandées {'cpu': X, 'memory': Y}
-            priority: Priorité de l'allocation (1-10)
-
-        Returns:
-            True si allocation réussie
-        """
+    async def allocate(self, agent_id, requirements, priority=1):
         async with self.lock:
-            # Vérifier disponibilité
+            # CRITICAL: Validate before allocation
             for resource, amount in requirements.items():
-                if resource not in self.resources:
-                    logger.warning(f"Unknown resource type: {resource}")
-                    continue
-
-                if self.resources[resource]['available'] < amount:
-                    logger.warning(
-                        f"Insufficient {resource}: "
-                        f"requested={amount}, available={self.resources[resource]['available']}"
+                if amount > self.resources[resource]['total']:
+                    raise ValueError(
+                        f"Request exceeds max: {amount} > "
+                        f"{self.resources[resource]['total']}"
                     )
-                    return False
 
-            # Allouer
+                available = self.resources[resource]['available']
+                if available < amount:
+                    if self.hard_limits_enabled:
+                        # Reject instead of allowing over-allocation
+                        logger.warning(
+                            f"Insufficient {resource}: {available} < {amount}"
+                        )
+                        return False
+                    else:
+                        # Queue the request
+                        await self.pending_queue.put({
+                            'agent_id': agent_id,
+                            'requirements': requirements,
+                            'priority': priority
+                        })
+                        return False
+
+            # Allocation is safe, proceed
             allocation = ResourceAllocation(
                 agent_id=agent_id,
                 resources=requirements.copy(),
@@ -145,6 +147,19 @@ class ResourceManager:
 
             logger.info(f"Resources allocated to {agent_id}: {requirements}")
             return True
+
+    async def process_queue(self):
+        """Background task to process pending allocations"""
+        while True:
+            request = await self.pending_queue.get()
+            success = await self.allocate(
+                request['agent_id'],
+                request['requirements'],
+                request['priority']
+            )
+            if success:
+                logger.info(f"Queued allocation succeeded: {request['agent_id']}")
+            await asyncio.sleep(0.1)
 
     async def release(self, agent_id: str) -> bool:
         """
@@ -171,7 +186,7 @@ class ResourceManager:
             logger.info(f"Resources released from {agent_id}")
             return True
 
-    async def reallocate(self, agent_id: str, new_requirements: Dict[str, float]) -> bool:
+    async def reallocate(self, agent_id: str, new_requirements: Dict[str, float], priority: int = 1) -> bool:
         """
         Réalloue les ressources d'un agent
 
@@ -186,7 +201,7 @@ class ResourceManager:
         if not success:
             return False
 
-        return await self.allocate(agent_id, new_requirements)
+        return await self.allocate(agent_id, new_requirements, priority)
 
     def get_status(self) -> Dict[str, Any]:
         """Retourne l'état des ressources"""

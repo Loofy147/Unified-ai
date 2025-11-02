@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import logging
+import numpy as np
+from pydantic import BaseModel, field_validator, Field
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +49,10 @@ class ComponentMetrics:
             'metadata': self.metadata
         }
 
-@dataclass
-class Task:
-    """Représentation unifiée d'une tâche"""
-    task_id: str
-    problem_type: str
-    description: str
+class TaskSchema(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=100)
+    problem_type: str = Field(..., pattern=r'^[a-z_]+$')
+    description: str = Field(..., max_length=1000)
     data_source: str
     target_metric: str
     priority: int = 1
@@ -60,19 +61,18 @@ class Task:
     context: Dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
 
+    @field_validator('problem_type')
+    def validate_problem_type(cls, v):
+        allowed = ['optimization', 'rl_control', 'analytical']
+        if v not in allowed:
+            raise ValueError(f'Invalid problem_type: {v}')
+        return v
+
+class Task(TaskSchema):
+    """Représentation unifiée d'une tâche"""
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            'task_id': self.task_id,
-            'problem_type': self.problem_type,
-            'description': self.description,
-            'data_source': self.data_source,
-            'target_metric': self.target_metric,
-            'priority': self.priority,
-            'deadline': self.deadline,
-            'resources_required': self.resources_required,
-            'context': self.context,
-            'status': self.status
-        }
+        return self.model_dump()
 
 class BaseAgent(ABC):
     """Classe de base abstraite pour tous les agents"""
@@ -210,3 +210,97 @@ class BaseAgent(ABC):
     def __repr__(self) -> str:
         return (f"<{self.__class__.__name__} id={self.agent_id} "
                 f"type={self.agent_type} status={self.status.value}>")
+
+class AgentValidator:
+    """Validates agent outputs for Byzantine behavior"""
+
+    def __init__(self):
+        self.agent_statistics = {}  # Track historical performance
+        self.anomaly_threshold = 3.0  # Standard deviations
+
+    def validate_output(self, agent_id, output, task_context):
+        """Validate agent output for anomalies"""
+
+        metrics = output.get('metrics', {})
+
+        # 1. Check for impossible values
+        if metrics.get('performance', 0) > 0.95:
+            if metrics.get('time', float('inf')) < 0.01:
+                return {
+                    'valid': False,
+                    'reason': 'impossible_performance_time_combination',
+                    'confidence': 0.95
+                }
+
+        # 2. Check against historical statistics
+        if agent_id in self.agent_statistics:
+            stats = self.agent_statistics[agent_id]
+
+            for metric_name, value in metrics.items():
+                if metric_name in stats:
+                    mean = stats[metric_name]['mean']
+                    std = stats[metric_name]['std']
+
+                    # Z-score test
+                    if std > 0:
+                        z_score = abs(value - mean) / std
+                        if z_score > self.anomaly_threshold:
+                            return {
+                                'valid': False,
+                                'reason': f'anomaly_in_{metric_name}',
+                                'z_score': z_score,
+                                'confidence': 0.8
+                            }
+
+        # 3. Cross-validation with similar agents
+        similar_agents = self._get_similar_agents(agent_id, task_context)
+        if similar_agents:
+            peer_performance = [
+                self.agent_statistics[a].get('performance', {}).get('mean', 0)
+                for a in similar_agents
+            ]
+            avg_peer_perf = np.mean(peer_performance)
+
+            agent_perf = metrics.get('performance', 0)
+            if agent_perf > avg_peer_perf * 1.5:  # 50% better than peers
+                return {
+                    'valid': False,
+                    'reason': 'significantly_outperforms_peers',
+                    'agent_perf': agent_perf,
+                    'peer_avg': avg_peer_perf,
+                    'confidence': 0.7
+                }
+
+        # Update statistics
+        self._update_statistics(agent_id, metrics)
+
+        return {'valid': True, 'confidence': 1.0}
+
+    def _update_statistics(self, agent_id, metrics):
+        """Update running statistics for agent"""
+        if agent_id not in self.agent_statistics:
+            self.agent_statistics[agent_id] = {}
+
+        for metric_name, value in metrics.items():
+            if metric_name not in self.agent_statistics[agent_id]:
+                self.agent_statistics[agent_id][metric_name] = {
+                    'values': [],
+                    'mean': 0,
+                    'std': 0
+                }
+
+            stat = self.agent_statistics[agent_id][metric_name]
+            stat['values'].append(value)
+
+            # Keep only recent 100 values
+            if len(stat['values']) > 100:
+                stat['values'] = stat['values'][-100:]
+
+            # Update mean and std
+            stat['mean'] = np.mean(stat['values'])
+            stat['std'] = np.std(stat['values'])
+
+    def _get_similar_agents(self, agent_id, context):
+        """Find agents that work on similar tasks"""
+        # Implementation depends on task categorization
+        return []
