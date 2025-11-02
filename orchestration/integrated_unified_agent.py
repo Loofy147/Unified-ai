@@ -209,19 +209,35 @@ class IntegratedUnifiedAgent:
                 'error': str(e)
             }
 
+    def _validate_agent_performance(self, result: Dict[str, Any]) -> bool:
+        """Validate agent performance metrics to detect anomalies."""
+        metrics = result.get('metrics', {})
+        performance = metrics.get('performance', 0.0)
+
+        if performance > 1.0 or performance < 0.0:
+            logger.warning(f"Invalid performance metric: {performance}")
+            return False
+
+        return True
+
     def _evaluate_performance(self, results: List[Dict[str, Any]]) -> float:
         """Évalue la performance globale"""
         if not results:
             return 0.0
 
+        valid_results = [r for r in results if self._validate_agent_performance(r)]
+
+        if not valid_results:
+            return 0.0
+
         # Compter les succès
-        successes = sum(1 for r in results if r.get('status') == 'success')
-        success_rate = successes / len(results)
+        successes = sum(1 for r in valid_results if r.get('status') == 'success')
+        success_rate = successes / len(valid_results)
 
         # Prendre en compte les métriques de performance si disponibles
         performances = [
             r.get('metrics', {}).get('performance', success_rate)
-            for r in results
+            for r in valid_results
         ]
 
         return sum(performances) / len(performances) if performances else success_rate

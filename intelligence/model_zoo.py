@@ -81,6 +81,9 @@ class ModelZoo:
         Returns:
             Version number
         """
+        if hasattr(model, '__reduce__'):
+            raise TypeError("Cannot register models with __reduce__ method for security reasons.")
+
         # Déterminer le numéro de version
         if model_id in self.models:
             version = max(self.models[model_id].keys()) + 1
@@ -111,9 +114,9 @@ class ModelZoo:
         model_dir.mkdir(exist_ok=True)
 
         # Sauvegarder le modèle
-        model_file = model_dir / f"v{version}.pkl"
-        with open(model_file, 'wb') as f:
-            pickle.dump(model, f)
+        model_file = model_dir / f"v{version}.json"
+        with open(model_file, 'w') as f:
+            json.dump(model, f)
 
         # Sauvegarder les métadonnées
         metadata_file = model_dir / f"v{version}_metadata.json"
@@ -159,20 +162,20 @@ class ModelZoo:
 
         # Déterminer la version
         if version is None:
-            versions = [int(f.stem[1:]) for f in model_dir.glob("v*.pkl")]
+            versions = [int(f.stem[1:]) for f in model_dir.glob("v*.json")]
             if not versions:
                 return None
             version = max(versions)
 
-        model_file = model_dir / f"v{version}.pkl"
+        model_file = model_dir / f"v{version}.json"
         metadata_file = model_dir / f"v{version}_metadata.json"
 
         if not model_file.exists():
             return None
 
         # Charger le modèle
-        with open(model_file, 'rb') as f:
-            model = pickle.load(f)
+        with open(model_file, 'r') as f:
+            model = json.load(f)
 
         # Charger les métadonnées
         metadata = {}
@@ -287,7 +290,7 @@ class ModelZoo:
                     del self.models[model_id]
 
                 # Supprimer du disque
-                model_file = self.storage_path / model_id / f"v{version}.pkl"
+                model_file = self.storage_path / model_id / f"v{version}.json"
                 metadata_file = self.storage_path / model_id / f"v{version}_metadata.json"
 
                 if model_file.exists():

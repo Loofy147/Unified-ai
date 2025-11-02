@@ -95,6 +95,20 @@ async def main():
     await system.shutdown()
     print("✓ Système arrêté proprement\n")
 
+    # 8. Lancer la campagne de Red Team
+    print("8. Lancement de la campagne de test Red Team...")
+    from red_team_framework import RedTeamOrchestrator
+    red_team = RedTeamOrchestrator()
+    report = await red_team.run_full_campaign(system)
+
+    print("\n" + "="*70)
+    print("RAPPORT DE CAMPAGNE RED TEAM")
+    print("="*70)
+    print(f"Score de sécurité global: {report['overall_security_score']:.1f}/100")
+    print(f"Attaques critiques: {report['severity_breakdown']['critical']}")
+    print("="*70 + "\n")
+
+
     print("="*70)
     print("DÉMONSTRATION TERMINÉE")
     print("="*70)

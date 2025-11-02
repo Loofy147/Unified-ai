@@ -29,6 +29,8 @@ class DifficultyLevel:
             'success_threshold': self.success_threshold
         }
 
+import asyncio
+
 class CurriculumManager:
     """Gère l'apprentissage progressif par curriculum"""
 
@@ -37,6 +39,7 @@ class CurriculumManager:
         self.max_level = max_level
         self.performance_history = []
         self.level_history = []
+        self._lock = asyncio.Lock()
 
         self.levels = self._initialize_levels()
         self.advancement_log = []
@@ -70,100 +73,92 @@ class CurriculumManager:
         Returns:
             Dictionnaire avec décision et détails
         """
-        self.performance_history.append({
-            'performance': performance,
-            'level': self.current_level,
-            'timestamp': datetime.now().isoformat(),
-            'context': task_context or {}
-        })
+        async with self._lock:
+            self.performance_history.append({
+                'performance': performance,
+                'level': self.current_level,
+                'timestamp': datetime.now().isoformat(),
+                'context': task_context or {}
+            })
 
-        current_level_obj = self.levels[self.current_level]
+            current_level_obj = self.levels[self.current_level]
 
-        # Calculer la performance récente
-        window = 10
-        if len(self.performance_history) >= window:
-            recent_performances = [
-                p['performance'] for p in self.performance_history[-window:]
-                if p['level'] == self.current_level
-            ]
+            # Calculer la performance récente
+            window = 10
+            if len(self.performance_history) >= window:
+                recent_performances = [
+                    p['performance'] for p in self.performance_history[-window:]
+                    if p['level'] == self.current_level
+                ]
 
-            if len(recent_performances) >= window:
-                recent_avg = np.mean(recent_performances)
-                recent_std = np.std(recent_performances)
+                if len(recent_performances) >= window:
+                    recent_avg = np.mean(recent_performances)
+                    recent_std = np.std(recent_performances)
 
-                decision = {
-                    'current_level': self.current_level,
-                    'performance': performance,
-                    'recent_average': recent_avg,
-                    'recent_std': recent_std,
-                    'threshold': current_level_obj.success_threshold,
-                    'action': 'continue'
-                }
+                    decision = {
+                        'current_level': self.current_level,
+                        'performance': performance,
+                        'recent_average': recent_avg,
+                        'recent_std': recent_std,
+                        'threshold': current_level_obj.success_threshold,
+                        'action': 'continue'
+                    }
 
-                # Décision d'avancement
-                if (recent_avg >= current_level_obj.success_threshold and
-                    recent_std < 0.1 and
-                    self.current_level < self.max_level):
+                    # Décision d'avancement
+                    if (recent_avg >= current_level_obj.success_threshold and
+                        recent_std < 0.1 and
+                        self.current_level < self.max_level):
 
-                    await self.advance_level()
-                    decision['action'] = 'advanced'
-                    decision['new_level'] = self.current_level
+                        await self._unsafe_advance_level()
+                        decision['action'] = 'advanced'
+                        decision['new_level'] = self.current_level
 
-                # Décision de régression (si performance très faible)
-                elif recent_avg < 0.5 and self.current_level > 1:
-                    await self.regress_level()
-                    decision['action'] = 'regressed'
-                    decision['new_level'] = self.current_level
+                    # Décision de régression (si performance très faible)
+                    elif recent_avg < 0.5 and self.current_level > 1:
+                        await self._unsafe_regress_level()
+                        decision['action'] = 'regressed'
+                        decision['new_level'] = self.current_level
 
-                return decision
+                    return decision
 
-        return {
-            'current_level': self.current_level,
-            'performance': performance,
-            'action': 'collecting_data',
-            'samples_needed': window - len(self.performance_history)
-        }
+            return {
+                'current_level': self.current_level,
+                'performance': performance,
+                'action': 'collecting_data',
+                'samples_needed': window - len(self.performance_history)
+            }
 
-    async def advance_level(self):
-        """Passe au niveau suivant"""
+    async def _unsafe_advance_level(self):
         if self.current_level < self.max_level:
             old_level = self.current_level
             self.current_level += 1
-
             self.level_history.append({
-                'from_level': old_level,
-                'to_level': self.current_level,
-                'direction': 'advance',
-                'timestamp': datetime.now().isoformat()
+                'from_level': old_level, 'to_level': self.current_level,
+                'direction': 'advance', 'timestamp': datetime.now().isoformat()
             })
-
-            self.advancement_log.append({
-                'level': self.current_level,
-                'timestamp': datetime.now().isoformat(),
-                'performances': self.performance_history[-10:] if len(self.performance_history) >= 10 else self.performance_history
-            })
-
-            # Reset l'historique de performance pour le nouveau niveau
             self.performance_history = []
+            logger.info(f"Advanced to level {self.current_level}")
 
-            logger.info(f"Advanced to level {self.current_level}: {self.levels[self.current_level].name}")
-
-    async def regress_level(self):
-        """Régresse au niveau précédent"""
+    async def _unsafe_regress_level(self):
         if self.current_level > 1:
             old_level = self.current_level
             self.current_level -= 1
-
             self.level_history.append({
-                'from_level': old_level,
-                'to_level': self.current_level,
-                'direction': 'regress',
-                'timestamp': datetime.now().isoformat()
+                'from_level': old_level, 'to_level': self.current_level,
+                'direction': 'regress', 'timestamp': datetime.now().isoformat()
             })
-
             self.performance_history = []
+            logger.warning(f"Regressed to level {self.current_level}")
 
-            logger.warning(f"Regressed to level {self.current_level}: {self.levels[self.current_level].name}")
+    async def advance_level(self):
+        """Passe au niveau suivant"""
+        async with self._lock:
+            await self._unsafe_advance_level()
+
+    async def regress_level(self):
+        """Régresse au niveau précédent"""
+        async with self._lock:
+            await self._unsafe_regress_level()
 
     def get_current_curriculum(self) -> Dict[str, Any]:
         """Retourne le curriculum actuel"""
@@ -206,13 +201,17 @@ class CurriculumManager:
             return self.levels[level].to_dict()
         return {}
 
-    def reset(self, level: int = 1):
-        """Réinitialise le curriculum"""
+    async def _unsafe_reset(self, level: int = 1):
         self.current_level = level
         self.performance_history = []
         self.level_history = []
         self.advancement_log = []
         logger.info(f"Curriculum reset to level {level}")
+
+    async def reset(self, level: int = 1):
+        """Réinitialise le curriculum"""
+        async with self._lock:
+            await self._unsafe_reset(level)
 
 # Singleton instance
 _curriculum_manager_instance = None
