@@ -1,75 +1,140 @@
-# Unified-ai
+# Unified AI System v2.0
 
-## Introduction
+The Unified AI System is a sophisticated, end-to-end platform designed to solve complex, multi-domain problems through intelligent orchestration of specialized AI agents. It features a resilient, modular architecture that supports continuous learning, dynamic adaptation, and self-optimization.
 
-The Unified-ai project is a sophisticated artificial intelligence system that combines advanced mathematical foundations, evolutionary algorithms, hierarchical reinforcement learning, multi-agent systems, knowledge graphs, and complex simulation environments. The project's goal is to create a truly general-purpose AI platform that can learn and adapt to new challenges.
+---
 
-## Architecture
+## 💡 Key Innovations
 
-The Unified-ai system is built on a modular architecture that allows for easy expansion and customization. The core of the system is a powerful autodidactic engine that is capable of learning from its own experience. This engine is augmented by a number of specialized agents that are designed to handle specific tasks, such as data analysis, natural language processing, and robotics.
+1.  **Intelligent Orchestration**: The `IntegratedUnifiedAgent` and `SuperAgent` monitor the entire system, performing automatic error correction, load balancing, and continuous performance optimization in the background.
+2.  **Curriculum Learning**: The `CurriculumManager` enables the system to learn progressively through 10 levels of difficulty. It automatically adjusts the complexity of training scenarios based on performance, preventing overfitting and ensuring robust learning.
+3.  **Hierarchical Memory**: The `MemoryStore` provides a sophisticated memory model, including short-term, long-term (consolidated), episodic, and semantic memory, all powered by an integrated Knowledge Graph.
+4.  **Dynamic Resource Management**: The `ResourceManager` allocates, monitors, and balances resources (CPU, GPU, Memory) in real-time, preventing overloads and ensuring efficient operation.
+5.  **Integrated Knowledge Graph**: The `KnowledgeGraphManager` provides complete traceability of actions and decisions, enabling causal analysis, peer-to-peer agent learning, and persistent memory across the entire system.
 
-The system's architecture is divided into the following layers:
+---
 
-* **Foundation Layer:** This layer provides the basic mathematical and computational tools that are needed to build and train AI models.
-* **Algorithm Layer:** This layer contains a variety of advanced AI algorithms, such as evolutionary algorithms, hierarchical reinforcement learning, and deep learning.
-* **Agent Layer:** This layer contains a number of specialized agents that are designed to handle specific tasks.
-* **Orchestration Layer:** This layer is responsible for coordinating the activities of the various agents in the system.
-* **Application Layer:** This layer provides a user interface to the system and allows users to interact with the AI models.
+## 🏗️ Architecture
 
-## Features
+The system is designed with a 5-layer hierarchical architecture, ensuring modularity, extensibility, and clear separation of concerns.
 
-The Unified-ai system has a number of features that make it a powerful and versatile AI platform. These features include:
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    LAYER 5: ORCHESTRATION                      │
+│     - IntegratedUnifiedAgent, SuperAgent (Error, Harmony)      │
+├────────────────────────────────────────────────────────────────┤
+│                    LAYER 4: INTELLIGENCE                       │
+│     - ProblemIdentifier, StrategySelector, ModelZoo, Memory    │
+├────────────────────────────────────────────────────────────────┤
+│                    LAYER 3: SPECIALIZED AGENTS                 │
+│     - OptimizationAgent, RLAgent, AnalyticalAgent, Hybrid      │
+├────────────────────────────────────────────────────────────────┤
+│                    LAYER 2: ALGORITHMS                         │
+│     - RL Frameworks, Evolutionary Algorithms, HRL, NAS         │
+├────────────────────────────────────────────────────────────────┤
+│                    LAYER 1: FOUNDATION                         │
+│     - Autodiff Engine, Knowledge Graph, Resource Manager       │
+└────────────────────────────────────────────────────────────────┘
+```
 
-* **Knowledge Graph:** A persistent memory system that allows the AI to learn from its past experiences and make better decisions in the future.
-* **SuperAgent:** A high-level orchestration system that manages the entire AI system, including error detection, performance optimization, and system health.
-* **UnifiedAgent:** A complete agent architecture that includes a problem identifier, a strategy selector, and a curriculum manager.
-* **Advanced Autodidactic Engine:** A powerful autodidactic engine that is capable of learning from its own experience and adapting to new challenges.
-* **Modular Architecture:** The system's modular architecture allows for easy expansion and customization.
-* **Specialized Agents:** The system includes a number of specialized agents that are designed to handle specific tasks.
-* **Powerful AI Algorithms:** The system includes a variety of advanced AI algorithms, such as evolutionary algorithms, hierarchical reinforcement learning, and deep learning.
-* **User-Friendly Interface:** The system provides a user-friendly interface that allows users to interact with the AI models.
+---
 
-## Roadmap
+## 🚀 Getting Started
 
-The Unified-ai project is still under development, but we have a clear roadmap for the future. Our goals for the next year include:
+### Prerequisites
 
-* **Phase 1: Reinforced Foundations (Week 1):**
-    * Integrate the enhanced autodidactic engine.
-    * Implement the knowledge graph system.
-    * Perform comprehensive testing and validation.
-* **Phase 2: Orchestration and Control (Week 2):**
-    * Implement the SuperAgent.
-    * Implement the UnifiedAgent.
-    * Implement asynchronous management.
-* **Phase 3: Advanced Learning (Week 3):**
-    * Implement the advanced reinforcement learning framework.
-    * Enhance the hierarchical reinforcement learning system.
-    * Implement curriculum learning.
-* **Phase 4: Environments and Applications (Week 4):**
-    * Implement the HardTradingEnv.
-    * Improve existing environments.
-    * Develop applications.
-* **Phase 5: Research and Theory (Week 5+):**
-    * Implement the dynamic adaptive system.
-    * Implement the QTEN (Quantum-Thermodynamic Emergent Network).
-    * Conduct comprehensive experiments.
+- Python 3.11+
+- `pip` for package management
 
-## Contributing
+### Installation
 
-We welcome contributions to the Unified-ai project. If you are interested in contributing, please see our contributing guide for more information.
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/your-username/unified-ai-system.git
+    cd unified-ai-system
+    ```
 
-### How to Contribute
+2.  **Install dependencies:**
+    *(Note: A `requirements.txt` file should be created for a seamless setup)*
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-There are many ways to contribute to the Unified-ai project. You can:
+---
 
-* **Submit bug reports:** If you find a bug in the system, please submit a bug report on our GitHub page.
-* **Submit feature requests:** If you have an idea for a new feature, please submit a feature request on our GitHub page.
-* **Write code:** If you are a developer, you can contribute code to the project. Please see our contributing guide for more information on how to submit code.
-* **Write documentation:** We are always looking for help with writing documentation. If you are a technical writer, please see our contributing guide for more information on how to contribute to the documentation.
+## ⚡ Quick Start
 
-### Contributor Guidelines
+The following example demonstrates how to initialize the system, register an agent, and solve a task.
 
-We have a few guidelines that we ask all contributors to follow. These guidelines are in place to ensure that the project is developed in a consistent and organized manner. Please see our contributing guide for more information on our contributor guidelines.
+```python
+import asyncio
+from orchestration.integrated_unified_agent import IntegratedUnifiedAgent
+from agents.base_agent import Task
+from agents.optimization_agent import OptimizationAgent
+
+async def main():
+    """Main execution function."""
+    print("Initializing Unified AI System...")
+    system = IntegratedUnifiedAgent("UnifiedAI_Demo")
+    await system.initialize()
+
+    print("Registering agent...")
+    await system.register_agent(OptimizationAgent())
+
+    demo_task = Task(
+        task_id="demo_001",
+        problem_type="optimization",
+        description="Optimize model hyperparameters.",
+        data_source="demo_data",
+        target_metric="accuracy"
+    )
+
+    print(f"Solving task {demo_task.task_id}...")
+    result = await system.solve_task(demo_task)
+
+    print(f"Task finished with status: {result.get('status')}")
+    print(f"Performance: {result.get('performance'):.2f}")
+
+    await system.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 🗺️ Roadmap
+
+The project is under active development and follows a phased implementation plan.
+
+-   [✅] **Phase 1: Reinforced Foundations**
+    -   Implement Knowledge Graph and SuperAgent systems.
+
+-   [⏳] **Phase 2: Full Intelligence & Orchestration**
+    -   Integrate all core components and remove mocks.
+    -   Implement `ResourceManager`, `MemoryStore`, and `ModelZoo`.
+
+-   [🔲] **Phase 3: Specialized Agents**
+    -   Implement a full suite of specialized agents (Optimization, RL, HRL, etc.).
+
+-   [🔲] **Phase 4: Realistic Environments**
+    -   Develop complex environments for trading, navigation, and puzzles.
+
+-   [𔲔] **Phase 5: Advanced Research**
+    -   Implement the dynamic adaptive system.
+    -   Begin research and implementation of the QTEN (Quantum-Thermodynamic Emergent Network).
+
+---
+
+## 📚 Documentation & Support
+
+-   **Detailed Architecture**: See `/docs/architecture.md`
+-   **API Reference**: See `/docs/api.md`
+-   **Tutorials**: See `/docs/tutorials/`
+
+For questions or issues, please open an issue on the project's GitHub page.
+
+---
 
 ## License
 
