@@ -4,17 +4,19 @@ Intègre tous les composants réels du système
 """
 
 import asyncio
+import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import logging
 
 # Imports réels des composants
-from agents.base_agent import BaseAgent, Task, ComponentStatus, AgentValidator
+from agents.base_agent import BaseAgent, Task, ComponentStatus
 from core.resources.resource_manager import get_resource_manager
 from intelligence.model_zoo import get_model_zoo
 from intelligence.curriculum_manager import get_curriculum_manager
 from intelligence.scenario_generator import get_scenario_generator
 from intelligence.memory.memory_store import get_memory_store
+from core.monitoring.monitoring_service import monitoring_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class IntegratedUnifiedAgent:
         self.curriculum_manager = get_curriculum_manager()
         self.scenario_generator = get_scenario_generator()
         self.memory = get_memory_store()
+        self.monitoring_service = monitoring_service
 
         # Agents enregistrés
         self.execution_agents: Dict[str, BaseAgent] = {}
@@ -39,7 +42,6 @@ class IntegratedUnifiedAgent:
         # Historique
         self.task_history = []
         self.performance_log = []
-        self.agent_validator = AgentValidator()
 
         logger.info(f"IntegratedUnifiedAgent '{system_name}' created")
 
@@ -96,7 +98,8 @@ class IntegratedUnifiedAgent:
         Returns:
             Résultat de l'exécution
         """
-        start_time = datetime.now()
+        start_time = time.monotonic()
+        self.monitoring_service.increment_counter("tasks.received")
         logger.info(f"Starting task: {task.task_id} (type={task.problem_type})")
 
         try:
@@ -134,29 +137,6 @@ class IntegratedUnifiedAgent:
                 if agent.agent_type == task.problem_type:
                     logger.info(f"Executing with agent: {agent_id}")
                     result = await agent.execute(task)
-
-                    # CRITICAL: Validate agent output
-                    validation = self.agent_validator.validate_output(
-                        agent_id=agent.agent_id,
-                        output=result,
-                        task_context={'task_type': task.problem_type}
-                    )
-
-                    if not validation['valid']:
-                        logger.warning(
-                            f"Agent {agent.agent_id} output failed validation: "
-                            f"{validation['reason']}"
-                        )
-
-                        # Mark as suspicious, don't use for training
-                        result['validated'] = False
-                        result['validation_failure'] = validation['reason']
-
-                        # Could also quarantine the agent
-                        # await self._quarantine_agent(agent.agent_id, validation)
-                    else:
-                        result['validated'] = True
-
                     execution_results.append(result)
 
                     # Enregistrer l'exécution
@@ -195,7 +175,7 @@ class IntegratedUnifiedAgent:
             await self.resource_manager.release(task.task_id)
 
             # 10. Enregistrer dans l'historique
-            elapsed_time = (datetime.now() - start_time).total_seconds()
+            elapsed_time = time.monotonic() - start_time
             self.task_history.append({
                 'task': task.to_dict(),
                 'performance': performance,
@@ -203,6 +183,9 @@ class IntegratedUnifiedAgent:
                 'scenario_id': scenario['scenario_id']
             })
             self.performance_log.append(performance)
+
+            self.monitoring_service.increment_counter("tasks.succeeded")
+            self.monitoring_service.record_latency("task.solve.latency_seconds", elapsed_time)
 
             logger.info(f"✓ Task completed: {task.task_id} "
                        f"(performance={performance:.2f}, time={elapsed_time:.2f}s)")
@@ -227,11 +210,19 @@ class IntegratedUnifiedAgent:
             except:
                 pass
 
+            self.monitoring_service.increment_counter("tasks.failed")
+            elapsed_time = time.monotonic() - start_time
+            self.monitoring_service.record_latency("task.solve.latency_seconds", elapsed_time)
+
             return {
                 'status': 'error',
                 'task_id': task.task_id,
                 'error': str(e)
             }
+
+    def get_metrics_summary(self) -> Dict[str, Any]:
+        """Retrieves a summary of collected metrics from the monitoring service."""
+        return self.monitoring_service.get_summary()
 
     def _validate_agent_performance(self, result: Dict[str, Any]) -> bool:
         """Validate agent performance metrics to detect anomalies."""

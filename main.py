@@ -108,6 +108,17 @@ async def main():
     print(f"Attaques critiques: {report['severity_breakdown']['critical']}")
     print("="*70 + "\n")
 
+    # 9. Afficher le rapport d'observabilité
+    print("9. Rapport d'Observabilité du Système:")
+    metrics = system.get_metrics_summary()
+    print(f"   - Tâches reçues: {metrics['counters'].get('tasks.received', 0)}")
+    print(f"   - Tâches réussies: {metrics['counters'].get('tasks.succeeded', 0)}")
+    print(f"   - Tâches échouées: {metrics['counters'].get('tasks.failed', 0)}")
+    if 'task.solve.latency_seconds' in metrics['latencies']:
+        latency = metrics['latencies']['task.solve.latency_seconds']
+        print(f"   - Latence moyenne des tâches: {latency['avg_seconds']:.3f}s")
+    print("="*70 + "\n")
+
 
     print("="*70)
     print("DÉMONSTRATION TERMINÉE")

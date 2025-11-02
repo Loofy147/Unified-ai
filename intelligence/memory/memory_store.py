@@ -71,8 +71,6 @@ class MemoryStore:
     def __init__(self, max_short_term: int = 1000, max_long_term: int = 10000):
         self.max_short_term = max_short_term
         self.max_long_term = max_long_term
-        self.consolidation_threshold = 800  # NEW: trigger earlier
-        self.memory_pressure_threshold = 0.8  # NEW
 
         # Différents types de mémoire
         self.short_term = deque(maxlen=max_short_term)
@@ -99,13 +97,9 @@ class MemoryStore:
         # Ajouter à la mémoire à court terme
         self.short_term.append(experience)
 
-        # NEW: Check memory pressure
-        if len(self.short_term) >= self.consolidation_threshold:
+        # Vérifier si consolidation nécessaire
+        if len(self.short_term) >= self.max_short_term * 0.9:
             await self._consolidate()
-
-        # NEW: Emergency consolidation if still too high
-        if len(self.short_term) >= self.max_short_term * self.memory_pressure_threshold:
-            await self._emergency_consolidation()
 
         logger.debug(f"Experience stored (short_term size: {len(self.short_term)})")
 
@@ -139,16 +133,6 @@ class MemoryStore:
                                maxlen=self.max_short_term)
 
         logger.info(f"Consolidated {consolidated_count} experiences to long-term memory")
-
-    async def _emergency_consolidation(self):
-        """Aggressively consolidate memory to relieve pressure."""
-        logger.warning("Memory pressure detected, starting emergency consolidation.")
-        # For now, simply discard the oldest 20% of short-term memory
-        items_to_remove = int(self.max_short_term * 0.2)
-        for _ in range(items_to_remove):
-            if self.short_term:
-                self.short_term.popleft()
-        logger.info(f"Emergency consolidation finished. Removed {items_to_remove} items.")
 
     async def retrieve(self, query: Dict[str, Any], limit: int = 10,
                       memory_type: str = 'all') -> List[Dict[str, Any]]:
