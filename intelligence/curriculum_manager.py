@@ -43,6 +43,9 @@ class CurriculumManager:
 
         self.levels = self._initialize_levels()
         self.advancement_log = []
+        self.validation_enabled = True  # NEW
+        self.min_samples_for_advancement = 20  # NEW (was 10)
+        self.consistency_threshold = 0.15  # NEW
 
         logger.info(f"CurriculumManager initialized (level={initial_level}/{max_level})")
 
@@ -61,10 +64,8 @@ class CurriculumManager:
             10: DifficultyLevel(10, 'Mythic', 1.5, 5000, 0.95)
         }
 
-    async def evaluate_performance(self, performance: float,
-                                   task_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Évalue la performance et décide de la progression
+    async def evaluate_performance(self, performance, task_context):
+        """Evaluate with validation"""
 
         Args:
             performance: Score de performance (0.0 à 1.0)

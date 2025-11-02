@@ -9,7 +9,7 @@ from datetime import datetime
 import logging
 
 # Imports réels des composants
-from agents.base_agent import BaseAgent, Task, ComponentStatus
+from agents.base_agent import BaseAgent, Task, ComponentStatus, AgentValidator
 from core.resources.resource_manager import get_resource_manager
 from intelligence.model_zoo import get_model_zoo
 from intelligence.curriculum_manager import get_curriculum_manager
@@ -39,6 +39,7 @@ class IntegratedUnifiedAgent:
         # Historique
         self.task_history = []
         self.performance_log = []
+        self.agent_validator = AgentValidator()
 
         logger.info(f"IntegratedUnifiedAgent '{system_name}' created")
 
@@ -133,6 +134,29 @@ class IntegratedUnifiedAgent:
                 if agent.agent_type == task.problem_type:
                     logger.info(f"Executing with agent: {agent_id}")
                     result = await agent.execute(task)
+
+                    # CRITICAL: Validate agent output
+                    validation = self.agent_validator.validate_output(
+                        agent_id=agent.agent_id,
+                        output=result,
+                        task_context={'task_type': task.problem_type}
+                    )
+
+                    if not validation['valid']:
+                        logger.warning(
+                            f"Agent {agent.agent_id} output failed validation: "
+                            f"{validation['reason']}"
+                        )
+
+                        # Mark as suspicious, don't use for training
+                        result['validated'] = False
+                        result['validation_failure'] = validation['reason']
+
+                        # Could also quarantine the agent
+                        # await self._quarantine_agent(agent.agent_id, validation)
+                    else:
+                        result['validated'] = True
+
                     execution_results.append(result)
 
                     # Enregistrer l'exécution

@@ -1,0 +1,832 @@
+# PBWC 3.0 + SPOK Integration System Documentation
+
+## Table of Contents
+
+1. [System Overview](#system-overview)
+2. [Architecture](#architecture)
+3. [Core Components](#core-components)
+4. [Implementation Details](#implementation-details)
+5. [API Reference](#api-reference)
+6. [Integration Guide](#integration-guide)
+7. [Configuration](#configuration)
+8. [Testing and Validation](#testing-and-validation)
+9. [Performance Benchmarks](#performance-benchmarks)
+10. [Troubleshooting](#troubleshooting)
+
+## System Overview
+
+The PBWC (Phylogenetic Branching with Weight Constraints) 3.0 + SPOK integration system combines advanced fractional calculus primitives with meta-orchestration capabilities for reinforcement learning and genetic algorithm optimization.
+
+### Key Features
+
+- **Fractional Memory Processing**: Grünwald-Letnikov weights with Caputo derivative computation
+- **Adaptive Parameter Tuning**: Real-time alpha adjustment based on performance feedback
+- **Multi-Agent Coordination**: SPOK meta-orchestrator for hybrid RL/GA systems
+- **Numerical Stability**: Robust handling of edge cases and extreme values
+- **Modular Architecture**: Clean interfaces for easy integration with existing systems
+
+### System Requirements
+
+```python
+# Required Dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+gymnasium[box2d]>=0.26.0  # For environment support
+matplotlib>=3.5.0         # For visualization (optional)
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SPOK Meta-Orchestrator                   │
+├─────────────────────┬───────────────────┬───────────────────┤
+│    RL Agent         │   GA Optimizer    │   Evaluation      │
+│    Adapter          │   Adapter         │   Module          │
+└─────────────────────┴───────────────────┴───────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                 Enhanced PBWC Policy Layer                  │
+├─────────────────────┬───────────────────┬───────────────────┤
+│ Fractional Memory   │ Adaptive Alpha    │ Neural ODE        │
+│ Buffer              │ Scheduler         │ Integration       │
+└─────────────────────┴───────────────────┴───────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                Fractional Primitives Core                   │
+├─────────────────────┬───────────────────┬───────────────────┤
+│ Grünwald-Letnikov   │ Caputo Fractional │ FNPD Parameter    │
+│ Weights             │ Derivatives       │ Evolution         │
+└─────────────────────┴───────────────────┴───────────────────┘
+```
+
+## Core Components
+
+### 1. Grünwald-Letnikov Weights
+
+Computes fractional derivative coefficients with numerical stability.
+
+```python
+def gl_weights(alpha: float, M: int, clip_thresh: float = 1e6, eps: float = 1e-12) -> np.ndarray:
+    """
+    Compute GL coefficients w_k = (-1)^k * C(alpha,k) for k=0..M-1.
+    
+    Args:
+        alpha: Fractional parameter (0 < alpha < 1)
+        M: Number of coefficients to compute
+        clip_thresh: Threshold for numerical explosion detection
+        eps: Small value for normalization stability
+        
+    Returns:
+        Normalized GL weights array of length M
+        
+    Mathematical Formulation:
+        w_k = (-1)^k * Γ(α+1) / (Γ(k+1) * Γ(α-k+1))
+        
+    Stability Features:
+        - Exponential fallback for numerical explosion
+        - L1 normalization to prevent scaling issues
+        - Bounds checking for infinite/NaN values
+    """
+    alpha = float(alpha)
+    M = int(M)
+    w = np.zeros(M, dtype=np.float64)
+    c = 1.0
+    w[0] = 1.0
+    exploding = False
+    
+    for k in range(1, M):
+        c = c * (alpha - (k - 1)) / k
+        val = ((-1.0) ** k) * c
+        w[k] = val
+        
+        if not np.isfinite(val) or abs(c) > clip_thresh:
+            exploding = True
+            break
+    
+    if exploding:
+        # Exponential fallback (stable decaying kernel)
+        tau = max(1.0, M // 4)
+        w = np.exp(-np.arange(M) / tau)
+        logger.warning(f"GL weights exploded for alpha={alpha}, using exponential fallback")
+    
+    # Normalize by L1 norm
+    w = w / (np.sum(np.abs(w)) + eps)
+    return w
+```
+
+### 2. Fractional Memory Buffer
+
+Maintains observation history and computes fractional memory terms.
+
+```python
+class FractionalMemoryBuffer:
+    """
+    Efficient buffer for vector histories with fractional memory computation.
+    
+    Key Features:
+        - Fixed-size circular buffer for memory efficiency
+        - Cached GL weights for performance
+        - Statistics tracking for monitoring
+        - Adaptive alpha updates
+    """
+    
+    def __init__(self, dim: int, M: int = 30, alpha: float = 0.7):
+        """
+        Initialize fractional memory buffer.
+        
+        Args:
+            dim: Dimension of input vectors
+            M: Maximum history length
+            alpha: Fractional parameter
+        """
+        self.dim = int(dim)
+        self.M = int(M)
+        self.alpha = float(alpha)
+        self.buffer = deque(maxlen=self.M)
+        self.weights = gl_weights(self.alpha, self.M)
+        self.stats = {'pushes': 0, 'computations': 0, 'avg_norm': 0.0}
+    
+    def push(self, x: np.ndarray):
+        """Add new vector to buffer."""
+        x = np.asarray(x, dtype=np.float64).reshape(self.dim)
+        self.buffer.append(x.copy())
+        self.stats['pushes'] += 1
+    
+    def fractional_memory_term(self) -> np.ndarray:
+        """
+        Compute fractional memory term: sum_{k=0}^{n-1} w_k * x_{t-k}
+        
+        Mathematical Details:
+            Memory term = Σ(k=0 to n-1) w_k * x(t-k)
+            where w_k are GL weights and x(t-k) are past observations
+            
+        Returns:
+            Fractional memory vector of dimension self.dim
+        """
+        if len(self.buffer) == 0:
+            return np.zeros(self.dim)
+        
+        self.stats['computations'] += 1
+        
+        # Get recent history (most recent first after reverse)
+        arr = np.stack(list(self.buffer)[-self.M:])
+        arr_rev = arr[::-1]  # Most recent first
+        
+        # Apply GL weights
+        w = self.weights[:arr_rev.shape[0]]
+        mem = (w[:, None] * arr_rev).sum(axis=0)
+        
+        # Update statistics
+        norm = np.linalg.norm(mem)
+        self.stats['avg_norm'] = 0.9 * self.stats['avg_norm'] + 0.1 * norm
+        
+        return mem
+    
+    def set_alpha(self, alpha: float):
+        """Update fractional parameter and recompute weights."""
+        if abs(alpha - self.alpha) > 1e-6:
+            self.alpha = float(alpha)
+            self.weights = gl_weights(self.alpha, self.M)
+```
+
+### 3. Caputo Fractional Layer
+
+Implements Caputo-style fractional derivatives using finite differences.
+
+```python
+class FractionalLayer:
+    """
+    Fractional layer implementing Caputo fractional derivatives.
+    
+    Caputo Definition:
+        D^α f(t) = (1/Γ(n-α)) ∫[0,t] f^(n)(τ)/(t-τ)^(α-n+1) dτ
+        
+    Discrete Implementation:
+        Uses finite differences followed by GL weight application
+    """
+    
+    def __init__(self, dim: int, M: int = 30, alpha: float = 0.7, caputo: bool = True):
+        self.dim = int(dim)
+        self.M = int(M)
+        self.caputo = bool(caputo)
+        self.mem = FractionalMemoryBuffer(dim=dim, M=M, alpha=alpha)
+        self.alpha = alpha
+        self.computation_count = 0
+    
+    def fractional_term(self) -> np.ndarray:
+        """
+        Compute fractional term using Caputo or Grünwald-Letnikov approach.
+        
+        Returns:
+            Fractional derivative approximation
+        """
+        self.computation_count += 1
+        
+        if not self.caputo:
+            return self.mem.fractional_memory_term()
+        
+        # Caputo-style: finite differences then GL weights
+        n = len(self.mem.buffer)
+        if n < 2:
+            return np.zeros(self.dim)
+        
+        arr = np.stack(list(self.mem.buffer)[-self.M:])
+        diffs = np.diff(arr, axis=0)  # Δx_{k} = x_{k+1} - x_k
+        
+        # Apply GL weights to differences
+        w = self.mem.weights[:diffs.shape[0]]
+        diffs_rev = diffs[::-1]
+        frac = (w[:diffs_rev.shape[0], None] * diffs_rev).sum(axis=0)
+        
+        return frac
+```
+
+### 4. Adaptive Alpha Scheduler
+
+Automatically adjusts fractional parameters based on performance.
+
+```python
+class AdaptiveAlphaScheduler:
+    """
+    Adaptive scheduler for fractional parameter α.
+    
+    Strategy:
+        - Decrease α (less memory) when performance improves
+        - Increase α (more memory) when performance stagnates
+        
+    This implements an exploration/exploitation balance through memory control.
+    """
+    
+    def __init__(self, alpha0: float = 0.6, min_alpha: float = 0.2, 
+                 max_alpha: float = 0.95, patience: int = 6, step: float = 0.05):
+        self.alpha = float(alpha0)
+        self.min_alpha = float(min_alpha)
+        self.max_alpha = float(max_alpha)
+        self.patience = int(patience)
+        self.step = float(step)
+        self.best = -np.inf
+        self.no_improve = 0
+        self.history = deque(maxlen=100)
+    
+    def update(self, score: float) -> float:
+        """
+        Update alpha based on performance score.
+        
+        Args:
+            score: Current performance metric (higher is better)
+            
+        Returns:
+            Updated alpha value
+            
+        Algorithm:
+            if score > best:
+                α = max(α_min, α - step/2)  # Exploit current knowledge
+            elif no_improvement >= patience:
+                α = min(α_max, α + step)    # Explore with more memory
+        """
+        self.history.append(score)
+        
+        if score > self.best + 1e-8:  # Improvement
+            self.best = score
+            self.no_improve = 0
+            self.alpha = max(self.min_alpha, self.alpha - self.step * 0.5)
+        else:
+            self.no_improve += 1
+            if self.no_improve >= self.patience:
+                self.alpha = min(self.max_alpha, self.alpha + self.step)
+                self.no_improve = 0
+        
+        return self.alpha
+```
+
+### 5. FNPD (Fractional Neural Parametric Derivatives)
+
+Tracks parameter evolution and provides fractional gradient information.
+
+```python
+class FNPD:
+    """
+    Fractional Neural Parametric Derivative system.
+    
+    Purpose:
+        Maintains history of parameter vectors and gradients to compute
+        fractional derivatives over parameter space, providing enhanced
+        gradient information for optimization.
+        
+    Applications:
+        - Momentum-like effects in parameter space
+        - Long-term parameter trend analysis
+        - Gradient smoothing and regularization
+    """
+    
+    def __init__(self, param_dim: int, M: int = 30, alpha: float = 0.7, caputo: bool = True):
+        self.dim = int(param_dim)
+        self.buffer = FractionalMemoryBuffer(dim=self.dim, M=M, alpha=alpha)
+        self.gradient_history = deque(maxlen=M)
+        self.stats = {'updates': 0, 'avg_grad_norm': 0.0}
+    
+    def fractional_gradient_term(self) -> np.ndarray:
+        """
+        Compute fractional combination of gradient history.
+        
+        Mathematical Form:
+            G_frac(t) = Σ(k=0 to n) w_k * ∇(t-k)
+            
+        This provides a memory-enhanced gradient that incorporates
+        information from previous optimization steps.
+        """
+        if len(self.gradient_history) == 0:
+            return np.zeros(self.dim)
+        
+        grads = np.stack(list(self.gradient_history)[-self.buffer.M:])
+        grads_rev = grads[::-1]
+        
+        w = gl_weights(self.buffer.alpha, grads_rev.shape[0])
+        frac_grad = (w[:, None] * grads_rev).sum(axis=0)
+        
+        return frac_grad
+```
+
+## SPOK Meta-Orchestrator
+
+The SPOK (SpokWorm) system coordinates multiple optimization modules.
+
+```python
+class SpokWorm:
+    """
+    Meta-orchestrator for hybrid RL/GA optimization systems.
+    
+    Core Functionality:
+        - Register multiple optimization modules (RL agents, GA optimizers)
+        - Coordinate training across modules
+        - Evaluate and select best-performing approaches
+        - Maintain performance history and statistics
+        
+    Integration Pattern:
+        1. Create environment factory
+        2. Register RL and GA modules via adapters
+        3. Run meta_loop() for coordinated optimization
+        4. Access best-performing module for deployment
+    """
+    
+    def __init__(self, env_factory: Callable[[], Any], seed: Optional[int] = None):
+        self.env_factory = env_factory
+        self.modules: Dict[str, Dict[str, Any]] = {}
+        self.history: List[Dict[str, Any]] = []
+        self.seed = seed or int(time.time())
+    
+    def register_rl_module(self, name: str, rl_agent: Any):
+        """
+        Register RL agent with minimal required interface:
+            - act(state, epsilon=0.0) -> action
+            - train_on_batch(batch) [optional]
+            - save(path), load(path) [optional]
+        """
+        self.modules[name] = {'type': 'rl', 'obj': rl_agent}
+    
+    def meta_loop(self, iterations: int = 100, evaluate_every: int = 10):
+        """
+        Main meta-learning coordination loop.
+        
+        Process:
+            1. Light training step for each module
+            2. Periodic evaluation of all modules
+            3. Performance tracking and best module selection
+            4. Adaptive coordination based on performance trends
+        """
+        for iteration in range(iterations):
+            # Training phase
+            for name in self.modules:
+                self.train_module_step(name)
+            
+            # Evaluation phase
+            if iteration % evaluate_every == 0:
+                scores = {name: self.evaluate_module(name) 
+                         for name in self.modules}
+                
+                best_module = max(scores, key=scores.get)
+                
+                self.history.append({
+                    'iteration': iteration,
+                    'scores': scores,
+                    'best_module': best_module
+                })
+```
+
+## Enhanced PBWC Policy
+
+The complete policy implementation combining all fractional components.
+
+```python
+class EnhancedPBWCPolicy:
+    """
+    PBWC Policy with integrated fractional primitives.
+    
+    Architecture:
+        Input → Fractional Augmentation → Neural Network → Action/Value
+        
+    Fractional Components:
+        - Observation memory buffer
+        - Activation fractional layers
+        - FNPD parameter tracking
+        - Adaptive alpha scheduling
+    """
+    
+    def __init__(self, obs_dim: int, act_dim: int, config: EnhancedPBWCConfig):
+        # Initialize fractional components
+        self.obs_memory = FractionalMemoryBuffer(
+            dim=obs_dim, M=config.fractional_M, alpha=config.fractional_alpha
+        )
+        
+        if config.use_fnpd:
+            param_count = self._estimate_param_count()
+            self.fnpd = FNPD(param_count, M=config.param_memory_length, 
+                            alpha=config.fractional_alpha)
+        
+        if config.use_adaptive_alpha:
+            self.alpha_scheduler = AdaptiveAlphaScheduler(
+                alpha0=config.fractional_alpha,
+                min_alpha=config.alpha_range[0],
+                max_alpha=config.alpha_range[1]
+            )
+    
+    def act(self, obs: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, float, np.ndarray]:
+        """
+        Generate action with fractional memory enhancement.
+        
+        Process:
+            1. Push observation to fractional memory
+            2. Compute fractional memory term
+            3. Augment observation with fractional information
+            4. Forward pass through neural network
+            5. Generate action with appropriate exploration
+        """
+        obs = np.asarray(obs, dtype=np.float32).flatten()
+        
+        # Fractional memory processing
+        self.obs_memory.push(obs)
+        frac_obs = self.obs_memory.fractional_memory_term()
+        
+        # Handle dimension mismatch
+        if frac_obs.shape[0] != obs.shape[0]:
+            frac_obs = np.zeros_like(obs)
+        
+        # Augmented observation
+        aug_obs = np.concatenate([obs, frac_obs])
+        
+        # Neural network forward pass with fractional activation tracking
+        mean_action, _ = self._forward_pass(aug_obs)
+        
+        # Action generation
+        if deterministic:
+            action = mean_action
+            log_prob = 0.0
+        else:
+            std = 0.3
+            noise = np.random.normal(0, std, size=mean_action.shape)
+            action = mean_action + noise
+            log_prob = -0.5 * np.sum((noise / std)**2 + 2 * np.log(std) + np.log(2 * np.pi))
+        
+        action = np.clip(action, -1.0, 1.0)
+        return action, float(log_prob), mean_action
+```
+
+## Configuration System
+
+Complete configuration management with validation and defaults.
+
+```python
+@dataclass
+class EnhancedPBWCConfig:
+    """
+    Comprehensive configuration for Enhanced PBWC system.
+    
+    Categories:
+        - Environment settings
+        - Learning parameters
+        - Fractional primitive parameters
+        - Neural network architecture
+        - Adaptive component settings
+    """
+    
+    # Environment
+    env_id: str = "LunarLanderContinuous-v3"
+    seed: int = 42
+    episodes: int = 500
+    
+    # Learning
+    gamma: float = 0.99
+    lr: float = 3e-4
+    grad_clip: float = 0.5
+    
+    # Network
+    hidden_sizes: List[int] = field(default_factory=lambda: [256, 256])
+    activation: str = "prelu"
+    
+    # Fractional Parameters
+    fractional_M: int = 30                    # GL weights length
+    fractional_alpha: float = 0.7             # Base fractional parameter
+    use_caputo: bool = True                   # Caputo vs GL derivatives
+    use_fnpd: bool = True                     # Enable FNPD
+    use_adaptive_alpha: bool = True           # Adaptive alpha scheduling
+    
+    # Multi-scale
+    n_alpha_groups: int = 3
+    alpha_range: Tuple[float, float] = (0.3, 0.85)
+    
+    # Memory management
+    obs_memory_length: int = 128
+    param_memory_length: int = 50
+    
+    # Validation
+    def __post_init__(self):
+        if not (0.1 <= self.fractional_alpha <= 0.99):
+            raise ValueError("fractional_alpha must be in range [0.1, 0.99]")
+        if self.fractional_M < 2:
+            raise ValueError("fractional_M must be >= 2")
+        if len(self.hidden_sizes) == 0:
+            raise ValueError("hidden_sizes cannot be empty")
+```
+
+## Integration Examples
+
+### Basic Integration
+
+```python
+# Create environment factory
+def create_env():
+    import gymnasium as gym
+    return gym.make('LunarLanderContinuous-v3')
+
+# Configure system
+config = EnhancedPBWCConfig(
+    episodes=200,
+    fractional_alpha=0.7,
+    use_adaptive_alpha=True
+)
+
+# Create and train
+env = create_env()
+trainer = EnhancedPBWCTrainer(env, config)
+results = trainer.train()
+
+print(f"Best return: {results['best_return']:.2f}")
+```
+
+### SPOK Meta-Coordination
+
+```python
+# Initialize SPOK
+spok = SpokWorm(env_factory=create_env, seed=42)
+
+# Create and register modules
+rl_agent = EnhancedPBWCTrainer(create_env(), config)
+rl_adapter = SpokPBWCAdapter(rl_agent)
+spok.register_rl_module('pbwc_enhanced', rl_adapter)
+
+# Add GA optimizer
+ga_optimizer = YourGAOptimizer()  # Your existing GA implementation
+ga_adapter = SpokGAAdapter(ga_optimizer)
+spok.register_ga_module('genetic_optimizer', ga_adapter)
+
+# Run coordinated optimization
+spok.meta_loop(iterations=100, evaluate_every=10)
+
+# Get best performer
+best_module = spok.get_best_module()
+print(f"Best module: {best_module}")
+```
+
+### Custom Adapter Example
+
+```python
+class CustomRLAdapter:
+    """Adapter for your existing RL agent."""
+    
+    def __init__(self, your_agent):
+        self.agent = your_agent
+    
+    def act(self, state, epsilon=0.0):
+        # Map to your agent's interface
+        return self.agent.select_action(state, exploration=epsilon)
+    
+    def train_on_batch(self, batch):
+        # Convert batch format if needed
+        experiences = [(s, a, r, s_next, done) for s, a, r, s_next, done in batch]
+        self.agent.update_from_experiences(experiences)
+    
+    def save(self, path):
+        self.agent.save_model(path)
+    
+    def load(self, path):
+        self.agent.load_model(path)
+```
+
+## Performance Optimization
+
+### Memory Management
+
+```python
+# Optimize buffer sizes based on available memory
+def calculate_optimal_buffer_size(obs_dim: int, available_mb: float) -> int:
+    """Calculate optimal buffer size given memory constraints."""
+    bytes_per_obs = obs_dim * 8  # float64
+    max_obs_count = int((available_mb * 1024 * 1024) / bytes_per_obs)
+    return min(max_obs_count, 200)  # Cap at reasonable maximum
+```
+
+### Computational Efficiency
+
+```python
+# Vectorized GL weights computation
+def vectorized_gl_weights(alphas: np.ndarray, M: int) -> np.ndarray:
+    """Compute GL weights for multiple alpha values simultaneously."""
+    alphas = alphas.reshape(-1, 1)  # Shape: (n_alphas, 1)
+    k_values = np.arange(M).reshape(1, -1)  # Shape: (1, M)
+    
+    # Vectorized computation
+    coeffs = np.ones_like(alphas * k_values)  # Shape: (n_alphas, M)
+    
+    for k in range(1, M):
+        coeffs[:, k] = coeffs[:, k-1] * (alphas.flatten() - (k-1)) / k
+    
+    weights = ((-1) ** k_values) * coeffs
+    return weights / np.sum(np.abs(weights), axis=1, keepdims=True)
+```
+
+## Testing Framework
+
+### Unit Tests
+
+```python
+import unittest
+
+class TestFractionalPrimitives(unittest.TestCase):
+    
+    def test_gl_weights_stability(self):
+        """Test GL weights computation stability."""
+        for alpha in [0.3, 0.5, 0.7, 0.9]:
+            weights = gl_weights(alpha, 20)
+            
+            # Check basic properties
+            self.assertEqual(len(weights), 20)
+            self.assertTrue(np.all(np.isfinite(weights)))
+            
+            # Check normalization
+            l1_norm = np.sum(np.abs(weights))
+            self.assertAlmostEqual(l1_norm, 1.0, places=6)
+    
+    def test_fractional_memory_buffer(self):
+        """Test fractional memory buffer functionality."""
+        buffer = FractionalMemoryBuffer(dim=4, M=10, alpha=0.6)
+        
+        # Test empty buffer
+        mem = buffer.fractional_memory_term()
+        self.assertEqual(mem.shape, (4,))
+        self.assertTrue(np.allclose(mem, 0))
+        
+        # Test with data
+        for i in range(15):  # More than buffer size
+            buffer.push(np.random.randn(4))
+        
+        mem = buffer.fractional_memory_term()
+        self.assertEqual(mem.shape, (4,))
+        self.assertTrue(np.all(np.isfinite(mem)))
+        
+        # Check buffer size limit
+        self.assertEqual(len(buffer.buffer), 10)
+```
+
+### Integration Tests
+
+```python
+class TestSystemIntegration(unittest.TestCase):
+    
+    def test_complete_training_pipeline(self):
+        """Test complete training pipeline."""
+        config = EnhancedPBWCConfig(episodes=5)  # Short test
+        
+        # Mock environment
+        class MockEnv:
+            def __init__(self):
+                self.observation_space = Mock()
+                self.observation_space.shape = (8,)
+                self.action_space = Mock()  
+                self.action_space.shape = (2,)
+            
+            def reset(self, seed=None):
+                return np.random.randn(8), {}
+            
+            def step(self, action):
+                obs = np.random.randn(8)
+                reward = -np.linalg.norm(action)
+                done = np.random.random() < 0.1
+                return obs, reward, done, False, {}
+        
+        env = MockEnv()
+        trainer = EnhancedPBWCTrainer(env, config)
+        
+        # Should complete without errors
+        results = trainer.train()
+        
+        self.assertIn('best_return', results)
+        self.assertIsInstance(results['best_return'], float)
+```
+
+## Troubleshooting Guide
+
+### Common Issues
+
+1. **Numerical Instability**
+   ```
+   Error: GL weights contain NaN/Inf values
+   Solution: Reduce alpha value or increase clip_thresh parameter
+   ```
+
+2. **Memory Issues**
+   ```
+   Error: Out of memory during buffer operations
+   Solution: Reduce fractional_M or obs_memory_length in config
+   ```
+
+3. **Performance Degradation**
+   ```
+   Issue: Training becomes very slow over time
+   Solution: Check adaptive alpha range, may be too high causing excessive memory usage
+   ```
+
+4. **Integration Problems**
+   ```
+   Error: Module registration fails
+   Solution: Ensure your agent implements required interface (act, train_on_batch)
+   ```
+
+### Debugging Tools
+
+```python
+def debug_fractional_system(policy: EnhancedPBWCPolicy):
+    """Debug fractional system state."""
+    stats = policy.get_comprehensive_stats()
+    
+    print("=== Fractional System Debug ===")
+    print(f"Observation buffer length: {stats['obs_memory']['length']}")
+    print(f"Current alpha: {stats['alpha_current']:.3f}")
+    print(f"Fractional norm: {stats['fractional_norm']:.3f}")
+    print(f"Memory utilization: {stats['memory_utilization']:.2%}")
+    
+    if 'alpha_scheduler' in stats:
+        alpha_stats = stats['alpha_scheduler']
+        print(f"Best score: {alpha_stats['bestScore']:.2f}")
+        print(f"No improve count: {alpha_stats['noImproveCount']}")
+```
+
+### Performance Monitoring
+
+```python
+class PerformanceMonitor:
+    """Monitor system performance metrics."""
+    
+    def __init__(self):
+        self.metrics = defaultdict(list)
+    
+    def log_episode(self, episode: int, return_value: float, alpha: float, 
+                   frac_norm: float, mem_util: float):
+        self.metrics['episode'].append(episode)
+        self.metrics['return'].append(return_value)
+        self.metrics['alpha'].append(alpha)
+        self.metrics['frac_norm'].append(frac_norm)
+        self.metrics['mem_util'].append(mem_util)
+    
+    def plot_metrics(self):
+        """Generate performance plots."""
+        import matplotlib.pyplot as plt
+        
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        
+        axes[0,0].plot(self.metrics['episode'], self.metrics['return'])
+        axes[0,0].set_title('Episode Returns')
+        
+        axes[0,1].plot(self.metrics['episode'], self.metrics['alpha'])
+        axes[0,1].set_title('Alpha Evolution')
+        
+        axes[1,0].plot(self.metrics['episode'], self.metrics['frac_norm'])
+        axes[1,0].set_title('Fractional Norm')
+        
+        axes[1,1].plot(self.metrics['episode'], self.metrics['mem_util'])
+        axes[1,1].set_title('Memory Utilization')
+        
+        plt.tight_layout()
+        plt.show()
+```
+
+## Conclusion
+
+This documentation provides a complete reference for the PBWC 3.0 + SPOK integrated system. The implementation combines rigorous mathematical foundations with practical engineering considerations for robust, scalable deployment.
+
+Key strengths:
+- Mathematically sound fractional calculus implementation
+- Adaptive parameter tuning based on performance feedback  
+- Modular architecture supporting easy integration
+- Comprehensive testing and validation framework
+- Production-ready error handling and monitoring
+
+The system is designed to enhance existing RL and GA implementations with minimal integration overhead while providing significant performance improvements through advanced fractional memory processing and meta-coordination capabilities.
