@@ -33,6 +33,10 @@ class AttackVector(Enum):
     BYZANTINE_AGENT = "byzantine_agent"
     CURRICULUM_EXPLOIT = "curriculum_exploit"
     KNOWLEDGE_GRAPH_CORRUPTION = "knowledge_graph_corruption"
+    TIMING_VULNERABILITY = "timing_vulnerability"
+    STATE_INCONSISTENCY = "state_inconsistency"
+    FUZZING = "fuzzing"
+    MODEL_ZOO_EXPLOIT = "model_zoo_exploit"
 
 
 @dataclass
@@ -299,6 +303,7 @@ class MemoryLeakAttack(AdversarialTestCase):
         system_failed = False
         weakness = ""
         errors = []
+        growth = 0
         
         try:
             # Get initial memory stats
@@ -345,7 +350,7 @@ class MemoryLeakAttack(AdversarialTestCase):
             severity="critical" if system_failed else "low",
             recovery_time=recovery_time,
             error_messages=errors,
-            system_state_corruption={'memory_growth': growth if 'growth' in locals() else 0},
+            system_state_corruption={'memory_growth': growth},
             recommendations=[
                 "Implement automatic memory consolidation threshold",
                 "Add memory pressure monitoring",
@@ -481,6 +486,297 @@ class KnowledgeGraphCorruptionAttack(AdversarialTestCase):
         )
 
 
+class DeadlockAttack(AdversarialTestCase):
+    """
+    Attack: Create circular dependencies between components to cause deadlock.
+    Target: Async coordination system and resource locking.
+    """
+    def __init__(self):
+        super().__init__("Deadlock Attack", AttackVector.DEADLOCK)
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time = time.time()
+        system_failed = False
+        weakness = ""
+        errors = []
+
+        try:
+            # Use two components that might interact, e.g., CurriculumManager and MemoryStore
+            cm = system.curriculum_manager
+            mem = system.memory
+
+            # Temporarily add locks for this test to simulate resource contention
+            # This is safer than manipulating the system's actual locks
+            if not hasattr(cm, '_deadlock_test_lock'):
+                cm._deadlock_test_lock = asyncio.Lock()
+            if not hasattr(mem, '_deadlock_test_lock'):
+                mem._deadlock_test_lock = asyncio.Lock()
+
+            async def curriculum_to_memory_path():
+                """Simulates a task path: Curriculum -> Memory"""
+                async with cm._deadlock_test_lock:
+                    await asyncio.sleep(0.02)  # Yield to ensure the other task can grab its lock
+                    logger.info("[DeadlockTest] Curriculum task has lock1, waiting for lock2...")
+                    async with mem._deadlock_test_lock:
+                        logger.info("[DeadlockTest] Curriculum task acquired both locks (should not happen)")
+
+            async def memory_to_curriculum_path():
+                """Simulates a task path: Memory -> Curriculum"""
+                async with mem._deadlock_test_lock:
+                    await asyncio.sleep(0.02)  # Yield to ensure the other task can grab its lock
+                    logger.info("[DeadlockTest] Memory task has lock2, waiting for lock1...")
+                    async with cm._deadlock_test_lock:
+                        logger.info("[DeadlockTest] Memory task acquired both locks (should not happen)")
+
+            try:
+                # Run both tasks concurrently. If they deadlock, wait_for will time out.
+                test_tasks = asyncio.gather(curriculum_to_memory_path(), memory_to_curriculum_path())
+                await asyncio.wait_for(test_tasks, timeout=1.0)
+
+                # If it completes, it means no deadlock. The system might be safe or the test is insufficient.
+                weakness = "System did not deadlock. It might have deadlock prevention or the test scenario was avoided."
+                system_failed = False
+
+            except asyncio.TimeoutError:
+                # A timeout is the expected result if a deadlock occurs.
+                weakness = "CRITICAL: A deadlock was detected. Two components created a circular lock dependency."
+                system_failed = True
+                errors.append("Test timed out, indicating a deadlock.")
+
+        except Exception as e:
+            system_failed = True
+            weakness = f"CRITICAL: System crashed during deadlock simulation: {str(e)}"
+            errors.append(str(e))
+
+        finally:
+            # Clean up the temporary locks to ensure no side-effects
+            if hasattr(system.curriculum_manager, '_deadlock_test_lock'):
+                del system.curriculum_manager._deadlock_test_lock
+            if hasattr(system.memory, '_deadlock_test_lock'):
+                del system.memory._deadlock_test_lock
+
+        recovery_time = time.time() - start_time
+
+        return AttackResult(
+            attack_name=self.name,
+            attack_vector=self.vector,
+            success=system_failed,  # 'success' means a weakness was found
+            system_failed=system_failed,
+            weakness_discovered=weakness,
+            severity="critical" if system_failed else "low",
+            recovery_time=recovery_time,
+            error_messages=errors,
+            system_state_corruption={},
+            recommendations=[
+                "Enforce a strict, system-wide lock acquisition order.",
+                "Refactor components to remove circular dependencies.",
+                "Use 'try-lock' patterns with timeouts where possible."
+            ]
+        )
+
+class StateInconsistencyAttack(AdversarialTestCase):
+    """
+    Attack: Create inconsistent state across distributed components
+    Target: Knowledge Graph, Memory Store, Curriculum Manager
+    """
+    def __init__(self):
+        super().__init__("State Inconsistency Attack", AttackVector.STATE_INCONSISTENCY)
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time = time.time()
+        weaknesses = []
+        try:
+            await system.curriculum_manager.evaluate_performance(0.95, {})
+            await system.memory.store_experience({'task_id': 'inconsistency_test', 'performance': 0.15, 'reward': 0.1, 'timestamp': datetime.now().isoformat()})
+
+            memory_exp = await system.memory.retrieve({'task_id': 'inconsistency_test'}, limit=1)
+            if memory_exp and abs(0.95 - memory_exp[0].get('performance', 0)) > 0.5:
+                weaknesses.append({'component': 'state_sync', 'issue': 'High inconsistency'})
+
+            success = len(weaknesses) > 0
+            severity = 'high' if success else 'low'
+            weakness_str = f'Found {len(weaknesses)} state inconsistencies'
+            recs = ['Implement state consistency checks'] if success else []
+
+        except Exception as e:
+            success, severity, weakness_str, recs = True, 'critical', f'System crashed: {e}', []
+
+        return AttackResult(
+            attack_name=self.name, attack_vector=self.vector, success=success,
+            system_failed=severity == 'critical', weakness_discovered=weakness_str,
+            severity=severity, recovery_time=time.time() - start_time, error_messages=[],
+            system_state_corruption={}, recommendations=recs
+        )
+
+class TimingAttack(AdversarialTestCase):
+    """
+    Attack: Exploit timing windows in async operations
+    Target: Race conditions in task execution
+    """
+    def __init__(self):
+        super().__init__("Timing Attack", AttackVector.TIMING_VULNERABILITY)
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time = time.time()
+        result_dict = {}
+        try:
+            from agents.base_agent import Task
+            task = Task(task_id="timing_attack", problem_type="optimization", description="t", data_source="t", target_metric="t")
+            task_future = asyncio.create_task(system.solve_task(task))
+
+            await asyncio.sleep(0.05)
+            timing_operations = [
+                system.curriculum_manager.reset(),
+                system.memory.clear_old_data(0)
+            ]
+            await asyncio.gather(*timing_operations)
+
+            try:
+                result = await asyncio.wait_for(task_future, timeout=2.0)
+                if result.get('status') == 'success':
+                    result_dict = {'success': False, 'weakness': 'System handled interference', 'severity': 'low'}
+                else:
+                    result_dict = {'success': True, 'weakness': 'MEDIUM: Interference caused failure', 'severity': 'medium', 'recs': ['Add task isolation']}
+            except asyncio.TimeoutError:
+                result_dict = {'success': True, 'weakness': 'CRITICAL: Timing attack caused hang', 'severity': 'critical'}
+
+        except Exception as e:
+            result_dict = {'success': True, 'weakness': f'System crashed: {e}', 'severity': 'critical'}
+        finally:
+            await system.memory.clear_old_data(0)
+
+        return AttackResult(
+            attack_name=self.name, attack_vector=self.vector, success=result_dict.get('success', False),
+            system_failed=result_dict.get('severity') == 'critical', weakness_discovered=result_dict.get('weakness', 'Unknown'),
+            severity=result_dict.get('severity', 'low'), recovery_time=time.time() - start_time, error_messages=[],
+            system_state_corruption={}, recommendations=result_dict.get('recs', [])
+        )
+
+class ByzantineAgentAttack(AdversarialTestCase):
+    """
+    Attack: Inject malicious agent that provides false information
+    Target: Agent trust and validation systems
+    """
+    def __init__(self):
+        super().__init__("Byzantine Agent Attack", AttackVector.BYZANTINE_AGENT)
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time = time.time()
+
+        class ByzantineAgent:
+            def __init__(self): self.agent_id, self.agent_type, self.status = "byzantine", "optimization", "healthy"
+            async def initialize(self): return True
+            async def execute(self, task): return {'status': 'success', 'metrics': {'performance': 0.99}}
+            async def health_check(self): return {'status': 'healthy'}
+            async def shutdown(self): return True
+
+        result_dict = {}
+        try:
+            await system.register_agent(ByzantineAgent())
+            from agents.base_agent import Task
+            tasks = [Task(task_id=f"b_{i}", problem_type="optimization", description="b", data_source="b", target_metric="b") for i in range(10)]
+            results = [await system.solve_task(t) for t in tasks]
+
+            if all(r.get('status') == 'success' for r in results):
+                result_dict = {'success': True, 'weakness': 'CRITICAL: System accepted all byzantine outputs', 'severity': 'critical', 'recs': ['Implement BFT']}
+            else:
+                result_dict = {'success': False, 'weakness': 'System rejected byzantine behavior', 'severity': 'low'}
+
+        except Exception as e:
+            result_dict = {'success': True, 'weakness': f'System crashed: {e}', 'severity': 'critical'}
+
+        return AttackResult(
+            attack_name=self.name, attack_vector=self.vector, success=result_dict['success'],
+            system_failed=result_dict['severity'] == 'critical', weakness_discovered=result_dict['weakness'],
+            severity=result_dict['severity'], recovery_time=time.time() - start_time, error_messages=[],
+            system_state_corruption={}, recommendations=result_dict.get('recs', [])
+        )
+
+
+class FuzzingAttack(AdversarialTestCase):
+    """
+    Attack: Feed malformed/random data to all interfaces
+    Target: Input validation across all components
+    """
+    def __init__(self):
+        super().__init__("Fuzzing Attack", AttackVector.FUZZING)
+
+    def generate_malicious_inputs(self) -> List[Any]:
+        """Generate various malicious/malformed inputs"""
+        return [
+            None, "", " " * 1000, -1, float('inf'), float('nan'), [], {},
+            {"__proto__": "polluted"}, "'; DROP TABLE e;--", "<script>alert('xss')</script>",
+            "A" * 10000, [i for i in range(1000)], {"nested": {"deep": "data"}},
+        ]
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time, crashes, tested = time.time(), 0, 0
+
+        for malicious in self.generate_malicious_inputs():
+            tested += 1
+            try:
+                from agents.base_agent import Task
+                task = Task(task_id=f"fuzz_{tested}", problem_type=str(malicious), description=str(malicious), data_source=str(malicious), target_metric=str(malicious))
+                await asyncio.wait_for(system.solve_task(task), timeout=1.0)
+            except Exception as e:
+                if "validation" not in str(e).lower():
+                    crashes += 1
+
+        crash_rate = crashes / tested if tested > 0 else 0
+        success = crash_rate > 0.1
+        severity = 'critical' if crash_rate > 0.3 else 'high' if success else 'low'
+
+        return AttackResult(
+            attack_name=self.name, attack_vector=self.vector, success=success,
+            system_failed=crashes > 0, weakness_discovered=f'Fuzzing caused {crashes} crashes',
+            severity=severity, recovery_time=time.time() - start_time, error_messages=[],
+            system_state_corruption={}, recommendations=['Add input validation']
+        )
+
+class ModelZooExploitAttack(AdversarialTestCase):
+    """
+    Attack: Exploit model storage to inject malicious models
+    Target: ModelZoo security and model validation
+    """
+    def __init__(self):
+        super().__init__("ModelZoo Exploit Attack", AttackVector.MODEL_ZOO_EXPLOIT)
+
+    async def execute(self, system) -> AttackResult:
+        logger.info(f"🔴 Executing: {self.name}")
+        start_time = time.time()
+
+        class MaliciousModel:
+            def __reduce__(self):
+                import os
+                return (os.system, ('echo "EXPLOITED"',))
+
+        result_dict = {}
+        try:
+            version = await system.model_zoo.register_model("malicious", MaliciousModel(), {}, save_to_disk=False)
+            retrieved = await system.model_zoo.get_model("malicious", version)
+            if retrieved is not None:
+                result_dict = {'success': True, 'weakness': 'CRITICAL: ModelZoo stored malicious model', 'severity': 'critical', 'recs': ['Use safe serialization']}
+            else:
+                result_dict = {'success': False, 'weakness': 'ModelZoo rejected malicious model', 'severity': 'low'}
+        except Exception as e:
+            if any(w in str(e).lower() for w in ['security', 'unsafe']):
+                result_dict = {'success': False, 'weakness': 'ModelZoo has security validation', 'severity': 'low'}
+            else:
+                result_dict = {'success': True, 'weakness': f'Unexpected error: {e}', 'severity': 'high'}
+
+        return AttackResult(
+            attack_name=self.name, attack_vector=self.vector, success=result_dict['success'],
+            system_failed=result_dict['severity'] == 'critical', weakness_discovered=result_dict['weakness'],
+            severity=result_dict['severity'], recovery_time=time.time() - start_time, error_messages=[],
+            system_state_corruption={}, recommendations=result_dict.get('recs', [])
+        )
+
+
 class RedTeamOrchestrator:
     """Orchestrates adversarial testing campaigns"""
     
@@ -491,7 +787,13 @@ class RedTeamOrchestrator:
             CascadeFailureAttack(),
             MemoryLeakAttack(),
             CurriculumExploitAttack(),
-            KnowledgeGraphCorruptionAttack()
+            KnowledgeGraphCorruptionAttack(),
+            DeadlockAttack(),
+            StateInconsistencyAttack(),
+            TimingAttack(),
+            ByzantineAgentAttack(),
+            FuzzingAttack(),
+            ModelZooExploitAttack(),
         ]
         self.results: List[AttackResult] = []
     

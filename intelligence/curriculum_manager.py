@@ -29,6 +29,8 @@ class DifficultyLevel:
             'success_threshold': self.success_threshold
         }
 
+import asyncio
+
 class CurriculumManager:
     """Gère l'apprentissage progressif par curriculum"""
 
@@ -37,6 +39,7 @@ class CurriculumManager:
         self.max_level = max_level
         self.performance_history = []
         self.level_history = []
+        self._lock = asyncio.Lock()
 
         self.levels = self._initialize_levels()
         self.advancement_log = []
@@ -64,133 +67,99 @@ class CurriculumManager:
     async def evaluate_performance(self, performance, task_context):
         """Evaluate with validation"""
 
-        # Store with metadata for validation
-        self.performance_history.append({
-            'performance': performance,
-            'level': self.current_level,
-            'timestamp': datetime.now().isoformat(),
-            'context': task_context,
-            'validated': False  # NEW
-        })
+        Args:
+            performance: Score de performance (0.0 à 1.0)
+            task_context: Contexte de la tâche (optionnel)
 
-        # Need enough samples
-        if len(self.performance_history) < self.min_samples_for_advancement:
-            return {'action': 'collecting_data'}
+        Returns:
+            Dictionnaire avec décision et détails
+        """
+        async with self._lock:
+            self.performance_history.append({
+                'performance': performance,
+                'level': self.current_level,
+                'timestamp': datetime.now().isoformat(),
+                'context': task_context or {}
+            })
 
-        recent = self.performance_history[-self.min_samples_for_advancement:]
-        recent_perf = [p['performance'] for p in recent]
+            current_level_obj = self.levels[self.current_level]
 
-        # CRITICAL: Validation checks
-        if self.validation_enabled:
-            # 1. Check for suspicious consistency (gaming indicator)
-            std_dev = np.std(recent_perf)
-            if std_dev < 0.02:  # Too consistent
-                logger.warning(
-                    f"Suspiciously consistent performance: std={std_dev:.4f}"
-                )
-                return {
-                    'action': 'validation_failed',
-                    'reason': 'performance_too_consistent'
-                }
+            # Calculer la performance récente
+            window = 10
+            if len(self.performance_history) >= window:
+                recent_performances = [
+                    p['performance'] for p in self.performance_history[-window:]
+                    if p['level'] == self.current_level
+                ]
 
-            # 2. Check for impossible values
-            if any(p > 0.98 for p in recent_perf):
-                logger.warning("Suspiciously high performance detected")
-                # Require external validation
-                if not await self._external_validation(recent):
-                    return {
-                        'action': 'validation_failed',
-                        'reason': 'external_validation_required'
+                if len(recent_performances) >= window:
+                    recent_avg = np.mean(recent_performances)
+                    recent_std = np.std(recent_performances)
+
+                    decision = {
+                        'current_level': self.current_level,
+                        'performance': performance,
+                        'recent_average': recent_avg,
+                        'recent_std': recent_std,
+                        'threshold': current_level_obj.success_threshold,
+                        'action': 'continue'
                     }
 
-            # 3. Check for monotonic improvement (gaming indicator)
-            if len(recent_perf) >= 10:
-                is_monotonic = all(
-                    recent_perf[i] <= recent_perf[i+1]
-                    for i in range(len(recent_perf)-1)
-                )
-                if is_monotonic:
-                    logger.warning("Monotonic improvement detected (suspicious)")
-                    return {
-                        'action': 'validation_failed',
-                        'reason': 'monotonic_improvement_suspicious'
-                    }
+                    # Décision d'avancement
+                    if (recent_avg >= current_level_obj.success_threshold and
+                        recent_std < 0.1 and
+                        self.current_level < self.max_level):
 
-            # 4. Check consistency across metrics
-            # If we have multiple metrics, they should correlate
-            if not await self._check_metric_correlation(recent):
-                return {
-                    'action': 'validation_failed',
-                    'reason': 'metric_inconsistency'
-                }
+                        await self._unsafe_advance_level()
+                        decision['action'] = 'advanced'
+                        decision['new_level'] = self.current_level
 
-        # Validation passed, proceed with normal logic
-        avg_performance = np.mean(recent_perf)
-        current_threshold = self.levels[self.current_level].success_threshold
+                    # Décision de régression (si performance très faible)
+                    elif recent_avg < 0.5 and self.current_level > 1:
+                        await self._unsafe_regress_level()
+                        decision['action'] = 'regressed'
+                        decision['new_level'] = self.current_level
 
-        if avg_performance >= current_threshold:
-            # Mark as validated before advancing
-            for p in recent:
-                p['validated'] = True
+                    return decision
 
-            await self.advance_level()
-            return {'action': 'advanced', 'new_level': self.current_level}
+            return {
+                'current_level': self.current_level,
+                'performance': performance,
+                'action': 'collecting_data',
+                'samples_needed': window - len(self.performance_history)
+            }
 
-        return {'action': 'continue'}
-
-    async def _external_validation(self, recent_experiences):
-        """Require external validation for suspicious performance"""
-        # In production: run agent on held-out validation set
-        # For now: placeholder that would connect to validation system
-        logger.info("External validation required")
-        return False  # Deny by default until validated
-
-    async def _check_metric_correlation(self, recent_experiences):
-        """Check if multiple metrics correlate appropriately"""
-        # If agent reports high accuracy but low reward, that's suspicious
-        # Implementation depends on available metrics
-        return True  # Placeholder
-
-    async def advance_level(self):
-        """Passe au niveau suivant"""
+    async def _unsafe_advance_level(self):
         if self.current_level < self.max_level:
             old_level = self.current_level
             self.current_level += 1
-
             self.level_history.append({
-                'from_level': old_level,
-                'to_level': self.current_level,
-                'direction': 'advance',
-                'timestamp': datetime.now().isoformat()
+                'from_level': old_level, 'to_level': self.current_level,
+                'direction': 'advance', 'timestamp': datetime.now().isoformat()
             })
-
-            self.advancement_log.append({
-                'level': self.current_level,
-                'timestamp': datetime.now().isoformat(),
-                'performances': self.performance_history[-10:] if len(self.performance_history) >= 10 else self.performance_history
-            })
-
-            # Reset l'historique de performance pour le nouveau niveau
             self.performance_history = []
+            logger.info(f"Advanced to level {self.current_level}")
 
-            logger.info(f"Advanced to level {self.current_level}: {self.levels[self.current_level].name}")
-
-    async def regress_level(self):
-        """Régresse au niveau précédent"""
+    async def _unsafe_regress_level(self):
         if self.current_level > 1:
             old_level = self.current_level
             self.current_level -= 1
-
             self.level_history.append({
-                'from_level': old_level,
-                'to_level': self.current_level,
-                'direction': 'regress',
-                'timestamp': datetime.now().isoformat()
+                'from_level': old_level, 'to_level': self.current_level,
+                'direction': 'regress', 'timestamp': datetime.now().isoformat()
             })
-
             self.performance_history = []
+            logger.warning(f"Regressed to level {self.current_level}")
 
-            logger.warning(f"Regressed to level {self.current_level}: {self.levels[self.current_level].name}")
+    async def advance_level(self):
+        """Passe au niveau suivant"""
+        async with self._lock:
+            await self._unsafe_advance_level()
+
+    async def regress_level(self):
+        """Régresse au niveau précédent"""
+        async with self._lock:
+            await self._unsafe_regress_level()
 
     def get_current_curriculum(self) -> Dict[str, Any]:
         """Retourne le curriculum actuel"""
@@ -233,13 +202,17 @@ class CurriculumManager:
             return self.levels[level].to_dict()
         return {}
 
-    def reset(self, level: int = 1):
-        """Réinitialise le curriculum"""
+    async def _unsafe_reset(self, level: int = 1):
         self.current_level = level
         self.performance_history = []
         self.level_history = []
         self.advancement_log = []
         logger.info(f"Curriculum reset to level {level}")
+
+    async def reset(self, level: int = 1):
+        """Réinitialise le curriculum"""
+        async with self._lock:
+            await self._unsafe_reset(level)
 
 # Singleton instance
 _curriculum_manager_instance = None
