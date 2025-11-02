@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestration.integrated_unified_agent import IntegratedUnifiedAgent
 from agents.base_agent import Task
-import agents.optimization_agent as opt_agent
-import agents.rl_agent as rl_agent
+from agents.optimization_agent import OptimizationAgent
+from agents.rl_agent import RLAgent
 
 async def main():
     """Fonction principale"""
@@ -41,10 +41,8 @@ async def main():
 
     # 2. Enregistrer les agents
     print("2. Enregistrement des agents...")
-
-    # Note: Implémenter les vrais agents dans leurs fichiers respectifs
-    # Pour l'instant, nous utilisons des agents de base
-
+    await system.register_agent(OptimizationAgent())
+    await system.register_agent(RLAgent())
     print("✓ Agents enregistrés\n")
 
     # 3. Afficher le statut initial
@@ -55,10 +53,10 @@ async def main():
     print(f"   - Mémoire: {status['memory']['total_experiences']} expériences\n")
 
     # 4. Démonstration avec une tâche exemple
-    print("4. Exécution d'une tâche de démonstration...")
+    print("4. Exécution d'une tâche d'optimisation...")
 
-    demo_task = Task(
-        task_id="demo_001",
+    opt_task = Task(
+        task_id="opt_demo_001",
         problem_type="optimization",
         description="Tâche de démonstration - Optimisation de hyperparamètres",
         data_source="demo_dataset",
@@ -66,20 +64,34 @@ async def main():
         priority=1
     )
 
-    # Note: Cette démonstration nécessite des agents implémentés
-    # result = await system.solve_task(demo_task)
-    # print(f"   Statut: {result['status']}")
-    # print(f"   Performance: {result.get('performance', 'N/A'):.2f}\n")
+    result = await system.solve_task(opt_task)
+    print(f"   Statut: {result['status']}")
+    print(f"   Performance: {result.get('performance', 'N/A'):.2f}\n")
 
-    # 5. Afficher le statut final
-    print("5. Statut final du système:")
+    print("5. Exécution d'une tâche d'apprentissage par renforcement...")
+
+    rl_task = Task(
+        task_id="rl_demo_001",
+        problem_type="rl_control",
+        description="Tâche de démonstration - Apprentissage par renforcement",
+        data_source="demo_dataset",
+        target_metric="reward",
+        priority=1
+    )
+
+    result = await system.solve_task(rl_task)
+    print(f"   Statut: {result['status']}")
+    print(f"   Performance: {result.get('performance', 'N/A'):.2f}\n")
+
+    # 6. Afficher le statut final
+    print("6. Statut final du système:")
     final_status = await system.get_system_status()
     print(f"   - Tâches complétées: {final_status['tasks_completed']}")
     print(f"   - Performance moyenne: {final_status['average_performance']:.2f}")
     print(f"   - Curriculum Level: {final_status['curriculum']['current_level']}\n")
 
-    # 6. Arrêt du système
-    print("6. Arrêt du système...")
+    # 7. Arrêt du système
+    print("7. Arrêt du système...")
     await system.shutdown()
     print("✓ Système arrêté proprement\n")
 
