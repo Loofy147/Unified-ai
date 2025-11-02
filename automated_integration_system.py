@@ -26,7 +26,7 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================================
 
-BASE_PATH = Path("/home/ubuntu/unified_ai_system")
+BASE_PATH = Path(".")
 
 PROJECT_STRUCTURE = {
     "core": {
