@@ -3,12 +3,14 @@ Model Zoo - Dépôt centralisé de modèles avec versioning
 """
 
 import json
-import pickle
+import dill
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
 import logging
+
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ class ModelVersion:
 class ModelZoo:
     """Dépôt centralisé de modèles avec versioning et persistence"""
 
-    def __init__(self, storage_path: str = "data/models"):
+    def __init__(self, storage_path: str):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
@@ -81,7 +83,9 @@ class ModelZoo:
         Returns:
             Version number
         """
-        if hasattr(model, '__reduce__'):
+        # Security check: prevent registering models that have an overridden __reduce__ method,
+        # which is a common vector for pickle-based attacks.
+        if '__reduce__' in model.__class__.__dict__:
             raise TypeError("Cannot register models with __reduce__ method for security reasons.")
 
         # Déterminer le numéro de version
@@ -113,10 +117,10 @@ class ModelZoo:
         model_dir = self.storage_path / model_id
         model_dir.mkdir(exist_ok=True)
 
-        # Sauvegarder le modèle
-        model_file = model_dir / f"v{version}.json"
-        with open(model_file, 'w') as f:
-            json.dump(model, f)
+        # Sauvegarder le modèle avec dill
+        model_file = model_dir / f"v{version}.dill"
+        with open(model_file, 'wb') as f:
+            dill.dump(model, f)
 
         # Sauvegarder les métadonnées
         metadata_file = model_dir / f"v{version}_metadata.json"
@@ -162,20 +166,20 @@ class ModelZoo:
 
         # Déterminer la version
         if version is None:
-            versions = [int(f.stem[1:]) for f in model_dir.glob("v*.json")]
+            versions = [int(f.stem[1:]) for f in model_dir.glob("v*.dill")]
             if not versions:
                 return None
             version = max(versions)
 
-        model_file = model_dir / f"v{version}.json"
+        model_file = model_dir / f"v{version}.dill"
         metadata_file = model_dir / f"v{version}_metadata.json"
 
         if not model_file.exists():
             return None
 
-        # Charger le modèle
-        with open(model_file, 'r') as f:
-            model = json.load(f)
+        # Charger le modèle avec dill
+        with open(model_file, 'rb') as f:
+            model = dill.load(f)
 
         # Charger les métadonnées
         metadata = {}
@@ -290,7 +294,7 @@ class ModelZoo:
                     del self.models[model_id]
 
                 # Supprimer du disque
-                model_file = self.storage_path / model_id / f"v{version}.json"
+                model_file = self.storage_path / model_id / f"v{version}.dill"
                 metadata_file = self.storage_path / model_id / f"v{version}_metadata.json"
 
                 if model_file.exists():
@@ -358,9 +362,15 @@ class ModelZoo:
 # Singleton instance
 _model_zoo_instance = None
 
-def get_model_zoo() -> ModelZoo:
-    """Retourne l'instance singleton du ModelZoo"""
+def get_model_zoo(force_reload: bool = False) -> ModelZoo:
+    """
+    Retourne l'instance singleton du ModelZoo.
+
+    Args:
+        force_reload: Si True, force la recréation de l'instance. Utile pour les tests.
+    """
     global _model_zoo_instance
-    if _model_zoo_instance is None:
-        _model_zoo_instance = ModelZoo()
+    if _model_zoo_instance is None or force_reload:
+        from core.config import settings
+        _model_zoo_instance = ModelZoo(storage_path=settings.model_zoo.storage_path)
     return _model_zoo_instance

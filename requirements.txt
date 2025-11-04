@@ -2,4 +2,3 @@ numpy
 pytest
 psutil
 pytest-asyncio
-pydantic

@@ -21,7 +21,8 @@ class MockSystem:
 
         self.curriculum_manager = CurriculumManager()
         self.memory = MemoryStore()
-        self.resource_manager = ResourceManager()
+        # Provide default values for the mock resource manager
+        self.resource_manager = ResourceManager(max_cpu=100.0, max_memory_mb=4096.0)
         self.agents = {}
 
     async def register_agent(self, agent):

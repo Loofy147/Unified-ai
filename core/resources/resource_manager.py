@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 
+from core.config import settings
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -78,20 +80,18 @@ class ResourceMonitor:
 class ResourceManager:
     """Gestionnaire de ressources complet avec monitoring"""
 
-    def __init__(self):
+    def __init__(self, max_cpu: float, max_memory_mb: float):
         self.resources = {
-            'cpu': {'total': 100.0, 'available': 100.0, 'unit': 'percent'},
-            'memory': {'total': 16000.0, 'available': 16000.0, 'unit': 'MB'},
-            'gpu': {'total': 1.0, 'available': 1.0, 'unit': 'device'}
+            'cpu': {'total': max_cpu, 'available': max_cpu, 'unit': 'percent'},
+            'memory': {'total': max_memory_mb, 'available': max_memory_mb, 'unit': 'MB'},
+            'gpu': {'total': 1.0, 'available': 1.0, 'unit': 'device'} # GPU remains hardcoded for now
         }
         self.allocations: Dict[str, ResourceAllocation] = {}
         self.lock = asyncio.Lock()
         self.monitor = ResourceMonitor()
         self.allocation_history = []
-        self.pending_queue = asyncio.Queue()  # NEW
-        self.hard_limits_enabled = True  # NEW
 
-        logger.info("ResourceManager initialized")
+        logger.info(f"ResourceManager initialized with max_cpu={max_cpu}, max_memory_mb={max_memory_mb}")
 
     async def start(self):
         """Démarre le gestionnaire"""
@@ -103,34 +103,34 @@ class ResourceManager:
         self.monitor.stop_monitoring()
         logger.info("ResourceManager stopped")
 
-    async def allocate(self, agent_id, requirements, priority=1):
+    async def allocate(self, agent_id: str, requirements: Dict[str, float],
+                      priority: int = 1) -> bool:
+        """
+        Alloue des ressources à un agent
+
+        Args:
+            agent_id: ID de l'agent
+            requirements: Ressources demandées {'cpu': X, 'memory': Y}
+            priority: Priorité de l'allocation (1-10)
+
+        Returns:
+            True si allocation réussie
+        """
         async with self.lock:
-            # CRITICAL: Validate before allocation
+            # Vérifier disponibilité
             for resource, amount in requirements.items():
-                if amount > self.resources[resource]['total']:
-                    raise ValueError(
-                        f"Request exceeds max: {amount} > "
-                        f"{self.resources[resource]['total']}"
+                if resource not in self.resources:
+                    logger.warning(f"Unknown resource type: {resource}")
+                    continue
+
+                if self.resources[resource]['available'] < amount:
+                    logger.warning(
+                        f"Insufficient {resource}: "
+                        f"requested={amount}, available={self.resources[resource]['available']}"
                     )
+                    return False
 
-                available = self.resources[resource]['available']
-                if available < amount:
-                    if self.hard_limits_enabled:
-                        # Reject instead of allowing over-allocation
-                        logger.warning(
-                            f"Insufficient {resource}: {available} < {amount}"
-                        )
-                        return False
-                    else:
-                        # Queue the request
-                        await self.pending_queue.put({
-                            'agent_id': agent_id,
-                            'requirements': requirements,
-                            'priority': priority
-                        })
-                        return False
-
-            # Allocation is safe, proceed
+            # Allouer
             allocation = ResourceAllocation(
                 agent_id=agent_id,
                 resources=requirements.copy(),
@@ -147,19 +147,6 @@ class ResourceManager:
 
             logger.info(f"Resources allocated to {agent_id}: {requirements}")
             return True
-
-    async def process_queue(self):
-        """Background task to process pending allocations"""
-        while True:
-            request = await self.pending_queue.get()
-            success = await self.allocate(
-                request['agent_id'],
-                request['requirements'],
-                request['priority']
-            )
-            if success:
-                logger.info(f"Queued allocation succeeded: {request['agent_id']}")
-            await asyncio.sleep(0.1)
 
     async def release(self, agent_id: str) -> bool:
         """
@@ -186,7 +173,7 @@ class ResourceManager:
             logger.info(f"Resources released from {agent_id}")
             return True
 
-    async def reallocate(self, agent_id: str, new_requirements: Dict[str, float], priority: int = 1) -> bool:
+    async def reallocate(self, agent_id: str, new_requirements: Dict[str, float]) -> bool:
         """
         Réalloue les ressources d'un agent
 
@@ -201,7 +188,7 @@ class ResourceManager:
         if not success:
             return False
 
-        return await self.allocate(agent_id, new_requirements, priority)
+        return await self.allocate(agent_id, new_requirements)
 
     def get_status(self) -> Dict[str, Any]:
         """Retourne l'état des ressources"""
@@ -276,9 +263,18 @@ class ResourceManager:
 # Singleton instance
 _resource_manager_instance = None
 
-def get_resource_manager() -> ResourceManager:
-    """Retourne l'instance singleton du ResourceManager"""
+def get_resource_manager(force_reload: bool = False) -> ResourceManager:
+    """
+    Retourne l'instance singleton du ResourceManager.
+
+    Args:
+        force_reload: Si True, force la recréation de l'instance. Utile pour les tests.
+    """
     global _resource_manager_instance
-    if _resource_manager_instance is None:
-        _resource_manager_instance = ResourceManager()
+    if _resource_manager_instance is None or force_reload:
+        from core.config import settings
+        _resource_manager_instance = ResourceManager(
+            max_cpu=settings.resource_manager.max_cpu,
+            max_memory_mb=settings.resource_manager.max_memory_mb
+        )
     return _resource_manager_instance
